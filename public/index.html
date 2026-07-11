@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>规则配置验证</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="global-header">
+      <div class="global-title">
+        <span class="global-icon">S</span>
+        <span>综测自动算分系统</span>
+      </div>
+      <div class="global-user">
+        <span>学院管理员</span>
+        <strong>规则与成绩管理</strong>
+      </div>
+    </header>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">R</div>
+          <div>
+            <h1>规则配置验证</h1>
+            <p id="healthText">连接检查中</p>
+          </div>
+        </div>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>规则集</h2>
+            <button id="refreshBtn" class="icon-btn" title="刷新">↻</button>
+          </div>
+          <div id="ruleSetList" class="list"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>版本</h2>
+          </div>
+          <div id="versionList" class="list muted-list"></div>
+        </section>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <h2 id="currentTitle">未选择规则版本</h2>
+            <p id="currentMeta">创建示例数据后，可以验证规则树和配置项是否落表。</p>
+          </div>
+          <div class="actions">
+            <button id="seedBtn" class="primary">载入默认规则集</button>
+            <button id="publishBtn">发布版本</button>
+            <button id="deleteRuleSetBtn" class="danger-btn">删除当前规则集</button>
+          </div>
+        </header>
+
+        <section class="metrics">
+          <div>
+            <span>规则节点</span>
+            <strong id="nodeCount">0</strong>
+          </div>
+          <div>
+            <span>可申报项</span>
+            <strong id="applyEntryCount">0</strong>
+          </div>
+          <div>
+            <span>表单字段</span>
+            <strong id="fieldCount">0</strong>
+          </div>
+          <div>
+            <span>材料要求</span>
+            <strong id="materialCount">0</strong>
+          </div>
+        </section>
+
+        <div class="content-grid">
+          <section class="surface tree-surface">
+            <div class="section-head">
+              <h2>规则树</h2>
+              <span id="treeHint">选择节点后可配置细节</span>
+            </div>
+            <div id="ruleTree" class="tree"></div>
+          </section>
+
+          <section class="surface editor-surface">
+            <div class="tabs">
+              <button class="tab active" data-tab="node">节点</button>
+              <button class="tab" data-tab="config">配置</button>
+              <button class="tab" data-tab="year">学年</button>
+              <button class="tab" data-tab="apply">申报</button>
+              <button class="tab" data-tab="audit">审核</button>
+              <button class="tab" data-tab="calc">核算</button>
+              <button class="tab" data-tab="result">结果</button>
+              <button class="tab" data-tab="system">系统</button>
+            </div>
+
+            <div id="tab-node" class="tab-page active">
+              <form id="nodeForm" class="form-grid">
+                <label>
+                  父节点
+                  <select name="parentId" id="parentSelect"></select>
+                </label>
+                <label>
+                  节点类型
+                  <select name="nodeType">
+                    <option value="module">模块</option>
+                    <option value="category">分类</option>
+                    <option value="subcategory">子分类</option>
+                    <option value="item">规则项</option>
+                    <option value="total">总分</option>
+                  </select>
+                </label>
+                <label>
+                  编码
+                  <input name="code" required placeholder="student_work.activity.sports.extra" />
+                </label>
+                <label>
+                  名称
+                  <input name="name" required placeholder="文体比赛补充项" />
+                </label>
+                <label>
+                  上限分
+                  <input name="maxScore" type="number" step="0.001" placeholder="2" />
+                </label>
+                <label>
+                  汇总方式
+                  <select name="aggregationType">
+                    <option value="">无</option>
+                    <option value="sum">求和</option>
+                    <option value="max">取最高</option>
+                    <option value="cap">封顶</option>
+                    <option value="formula">公式</option>
+                    <option value="deduct">扣分</option>
+                  </select>
+                </label>
+                <label>
+                  排序
+                  <input name="sortOrder" type="number" value="0" />
+                </label>
+                <label class="check-line">
+                  <input name="isApplyEntry" type="checkbox" />
+                  学生可申报
+                </label>
+                <label class="wide">
+                  说明
+                  <textarea name="description" rows="3"></textarea>
+                </label>
+                <button class="primary wide" type="submit">新增规则节点</button>
+              </form>
+            </div>
+
+            <div id="tab-config" class="tab-page">
+              <div id="selectedNodeBox" class="selected-box">尚未选择节点</div>
+
+              <form id="calcForm" class="compact-form">
+                <h3>计分配置</h3>
+                <div class="row-3">
+                  <input name="configType" placeholder="level / weight / formula" />
+                  <input name="formulaCode" placeholder="公式编码，可空" />
+                  <input name="roundingRule" placeholder="round / none" />
+                </div>
+                <textarea name="configJson" rows="4">{"levels":[{"name":"示例等级","score":1}]}</textarea>
+                <button type="submit">添加计分配置</button>
+              </form>
+
+              <form id="fieldForm" class="compact-form">
+                <h3>申报字段</h3>
+                <div class="row-3">
+                  <input name="fieldKey" placeholder="field_key" />
+                  <input name="fieldLabel" placeholder="字段名称" />
+                  <select name="fieldType">
+                    <option value="text">文本</option>
+                    <option value="number">数字</option>
+                    <option value="date">日期</option>
+                    <option value="select">下拉</option>
+                    <option value="member_list">成员列表</option>
+                  </select>
+                </div>
+                <textarea name="optionsJson" rows="3">["选项一","选项二"]</textarea>
+                <label class="check-line"><input name="required" type="checkbox" checked /> 必填</label>
+                <button type="submit">添加申报字段</button>
+              </form>
+
+              <form id="materialForm" class="compact-form">
+                <h3>材料要求</h3>
+                <div class="row-3">
+                  <input name="materialName" placeholder="材料名称" />
+                  <input name="fileTypeLimit" placeholder="pdf,jpg,png" />
+                  <input name="maxFileCount" type="number" value="1" />
+                </div>
+                <textarea name="description" rows="2" placeholder="材料说明"></textarea>
+                <button type="submit">添加材料要求</button>
+              </form>
+
+              <form id="auditForm" class="compact-form">
+                <h3>审核要求</h3>
+                <div class="row-3">
+                  <select name="auditRole">
+                    <option value="class_committee">班委</option>
+                    <option value="college_admin">学院管理员</option>
+                    <option value="system">系统</option>
+                  </select>
+                  <select name="needSecondAudit">
+                    <option value="0">不需要复核</option>
+                    <option value="1">需要复核</option>
+                  </select>
+                  <input name="rejectReasonTemplate" placeholder='["材料不完整"]' />
+                </div>
+                <textarea name="auditInstruction" rows="2" placeholder="审核说明"></textarea>
+                <button type="submit">添加审核要求</button>
+              </form>
+
+              <form id="scopeForm" class="compact-form">
+                <h3>适用范围</h3>
+                <div class="row-3">
+                  <select name="scopeType">
+                    <option value="major">专业</option>
+                    <option value="grade">年级</option>
+                    <option value="student_type">学生类型</option>
+                    <option value="class">班级</option>
+                  </select>
+                  <input name="scopeValue" placeholder="如 normal / 2025 / 人工智能" />
+                  <select name="includeOrExclude">
+                    <option value="include">包含</option>
+                    <option value="exclude">排除</option>
+                  </select>
+                </div>
+                <button type="submit">添加适用范围</button>
+              </form>
+
+              <form id="groupRuleForm" class="compact-form">
+                <h3>团体分配规则</h3>
+                <div class="row-3">
+                  <select name="distributionType">
+                    <option value="leader_member">负责人/成员</option>
+                    <option value="first_second_half">前后50%</option>
+                    <option value="equal">等额</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <textarea name="configJson" rows="3">{"leader_score_ratio":1,"member_score_ratio":0.8}</textarea>
+                <button type="submit">添加团体分配规则</button>
+              </form>
+            </div>
+
+            <div id="tab-year" class="tab-page">
+              <form id="ruleSetForm" class="compact-form">
+                <h3>新建规则集</h3>
+                <input name="name" placeholder="规则集名称" />
+                <textarea name="description" rows="2" placeholder="说明"></textarea>
+                <button type="submit">创建规则集</button>
+              </form>
+
+              <form id="versionForm" class="compact-form">
+                <h3>新建版本</h3>
+                <div class="row-3">
+                  <input name="versionNo" placeholder="v2026.09" />
+                  <input name="versionName" placeholder="版本名称" />
+                  <input name="changeNote" placeholder="变更说明" />
+                </div>
+                <button type="submit">创建版本</button>
+              </form>
+
+              <form id="yearForm" class="compact-form">
+                <h3>新建学年</h3>
+                <div class="row-3">
+                  <input name="name" placeholder="2025-2026学年度" />
+                  <input name="evaluationStartDate" type="date" value="2025-09-01" />
+                  <input name="evaluationEndDate" type="date" value="2026-08-31" />
+                </div>
+                <button type="submit">创建学年</button>
+              </form>
+
+              <form id="snapshotForm" class="compact-form">
+                <h3>绑定学年规则快照</h3>
+                <select name="academicYearId" id="yearSelect"></select>
+                <button type="submit">将当前版本绑定为快照</button>
+              </form>
+              <div id="yearList" class="plain-list"></div>
+            </div>
+
+            <div id="tab-apply" class="tab-page">
+              <div class="section-actions">
+                <label class="inline-label">
+                  学生ID
+                  <input id="applyStudentId" value="2026001" />
+                </label>
+                <label class="inline-label">
+                  申报学年
+                  <select id="applyYearSelect"></select>
+                </label>
+                <button id="loadApplyBtn">刷新申报</button>
+              </div>
+
+              <div class="apply-layout">
+                <div>
+                  <h3>可申报项目</h3>
+                  <div id="applyEntryList" class="plain-list"></div>
+                </div>
+                <div>
+                  <h3>填报内容</h3>
+                  <div id="applyEditor" class="selected-box">请选择一个可申报项目</div>
+                  <div class="button-row">
+                    <button id="saveDraftBtn" class="primary">保存草稿</button>
+                    <button id="submitApplyBtn">提交审核</button>
+                  </div>
+                  <form id="materialUploadForm" class="compact-form">
+                    <h3>上传证明材料</h3>
+                    <select id="materialRequirementSelect" name="materialRequirementId"></select>
+                    <input id="materialFileInput" type="file" />
+                    <button type="submit">上传材料</button>
+                  </form>
+                </div>
+                <div>
+                  <h3>我的申报</h3>
+                  <div id="studentApplicationList" class="plain-list"></div>
+                  <h3>申报详情</h3>
+                  <div id="studentApplicationDetail" class="selected-box">请选择一条申报记录</div>
+                </div>
+              </div>
+            </div>
+
+            <div id="tab-audit" class="tab-page">
+              <div class="section-actions">
+                <button id="seedAuditBtn" class="primary">生成申报样例</button>
+                <select id="auditStatusFilter">
+                  <option value="submitted">待审核</option>
+                  <option value="approved">已通过</option>
+                  <option value="returned">已退回</option>
+                  <option value="rejected">已驳回</option>
+                  <option value="all">全部</option>
+                </select>
+                <button id="loadAuditBtn">刷新审核列表</button>
+              </div>
+              <div class="two-column">
+                <div>
+                  <h3>申报记录</h3>
+                  <div id="auditApplicationList" class="plain-list"></div>
+                </div>
+                <div>
+                  <h3>申报详情</h3>
+                  <div id="auditDetail" class="selected-box">请选择一条申报记录</div>
+                  <div class="button-row">
+                    <button id="approveBtn" class="primary">审核通过</button>
+                    <button id="returnBtn">退回修改</button>
+                    <button id="rejectBtn">驳回</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div id="tab-calc" class="tab-page">
+              <div class="section-actions">
+                <button id="runCalcBtn" class="primary">手动重算</button>
+                <button id="loadCalcBtn">刷新核算批次</button>
+              </div>
+              <div class="two-column">
+                <div>
+                  <h3>核算批次</h3>
+                  <div id="calcBatchList" class="plain-list"></div>
+                </div>
+                <div>
+                  <h3>核算结果</h3>
+                  <div id="calcResultList" class="plain-list"></div>
+                  <h3>学生明细</h3>
+                  <div id="calcDetail" class="selected-box">请选择一条核算结果</div>
+                </div>
+              </div>
+            </div>
+
+            <div id="tab-result" class="tab-page">
+              <div class="section-actions">
+                <select id="resultYearSelect"></select>
+                <button id="loadResultBtn">刷新结果</button>
+                <button id="exportResultBtn" class="primary">导出结果</button>
+                <button id="startClassPublicityBtn">班委发起公示</button>
+                <button id="startCollegePublicityBtn">学院发起公示</button>
+                <button id="endPublicityBtn">结束公示</button>
+              </div>
+              <section class="metrics result-metrics">
+                <div><span>核算批次</span><strong id="resultBatchId">-</strong></div>
+                <div><span>结果人数</span><strong id="resultStudentCount">0</strong></div>
+                <div><span>班级数</span><strong id="resultClassCount">0</strong></div>
+                <div><span>公示状态</span><strong id="publicityStateText">未公示</strong></div>
+              </section>
+              <div class="two-column">
+                <div>
+                  <h3>行政班得分汇总</h3>
+                  <div class="section-actions compact-actions">
+                    <input id="statsGradeFilter" placeholder="年级，如 2026" />
+                    <input id="statsMajorFilter" placeholder="专业" />
+                    <button id="loadStatsBtn">查询</button>
+                  </div>
+                  <div id="classStatsList" class="plain-list"></div>
+                </div>
+                <div>
+                  <h3>最新成绩</h3>
+                  <div id="resultList" class="plain-list"></div>
+                  <h3>公示批次</h3>
+                  <div id="publicityBatchList" class="plain-list"></div>
+                </div>
+              </div>
+            </div>
+
+            <div id="tab-system" class="tab-page">
+              <div class="tabs sub-tabs">
+                <button class="sub-tab active" data-system-tab="students">学生列表</button>
+                <button class="sub-tab" data-system-tab="users">用户管理</button>
+                <button class="sub-tab" data-system-tab="logs">操作日志</button>
+              </div>
+
+              <div id="system-students" class="system-page active">
+                <div class="section-actions">
+                  <input id="studentKeyword" placeholder="学号/姓名" />
+                  <input id="studentGrade" placeholder="年级" />
+                  <input id="studentMajor" placeholder="专业" />
+                  <button id="loadStudentsBtn">查询</button>
+                  <button id="downloadStudentTemplateBtn">模板下载</button>
+                  <label class="file-like">批量导入<input id="studentImportInput" type="file" accept=".xlsx" /></label>
+                </div>
+                <div class="two-column">
+                  <div>
+                    <h3>学生列表</h3>
+                    <div id="studentList" class="plain-list"></div>
+                  </div>
+                  <div>
+                    <h3>学生详情/更新</h3>
+                    <form id="studentForm" class="compact-form">
+                      <input name="id" type="hidden" />
+                      <div class="row-3">
+                        <input name="studentNo" placeholder="学号" />
+                        <input name="name" placeholder="姓名" />
+                        <input name="grade" placeholder="年级" />
+                      </div>
+                      <div class="row-3">
+                        <input name="major" placeholder="专业" />
+                        <input name="className" placeholder="行政班" />
+                        <select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
+                      </div>
+                      <div class="row-3">
+                        <input name="phone" placeholder="手机号" />
+                        <input name="email" placeholder="邮箱" />
+                        <input name="studentType" placeholder="学生类型" value="normal" />
+                      </div>
+                      <button class="primary" type="submit">保存学生</button>
+                    </form>
+                    <div id="studentDetail" class="selected-box">请选择学生</div>
+                  </div>
+                </div>
+              </div>
+
+              <div id="system-users" class="system-page">
+                <div class="section-actions">
+                  <input id="userKeyword" placeholder="用户名/姓名" />
+                  <select id="userRoleFilter"><option value="">全部角色</option><option value="student">学生</option><option value="class_committee">班委</option><option value="college_admin">学院管理员</option></select>
+                  <button id="loadUsersBtn">查询</button>
+                  <button id="downloadUserTemplateBtn">模板下载</button>
+                  <label class="file-like">批量导入<input id="userImportInput" type="file" accept=".xlsx" /></label>
+                </div>
+                <form id="userForm" class="compact-form">
+                  <input name="id" type="hidden" />
+                  <div class="row-3">
+                    <input name="username" placeholder="用户名" />
+                    <input name="displayName" placeholder="显示名称" />
+                    <input name="password" placeholder="初始/重置密码" value="123456" />
+                  </div>
+                  <div class="row-3">
+                    <select name="role"><option value="student">学生</option><option value="class_committee">班委</option><option value="college_admin">学院管理员</option></select>
+                    <select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
+                    <input name="email" placeholder="邮箱" />
+                  </div>
+                  <button class="primary" type="submit">保存用户</button>
+                  <button id="resetUserPasswordBtn" type="button">重置密码</button>
+                </form>
+                <div id="userList" class="plain-list"></div>
+              </div>
+
+              <div id="system-logs" class="system-page">
+                <div class="section-actions">
+                  <select id="logModuleFilter"><option value="">全部模块</option><option value="system">系统管理</option><option value="rule">规则管理</option><option value="year">学年管理</option><option value="result">结果管理</option></select>
+                  <button id="loadLogsBtn">刷新日志</button>
+                </div>
+                <div id="operationLogList" class="plain-list"></div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

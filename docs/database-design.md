@@ -1,0 +1,688 @@
+# 综合测评系统数据库设计
+
+## 1. 设计目标
+
+本数据库用于支撑人工智能学院本科生综合测评业务，覆盖学年管理、规则配置、学生申报、材料提交、审核、智能核算、结果统计、公示、异议处理和系统管理。
+
+核心设计目标如下：
+
+- 规则可以按学年变化，但变化必须被限制在系统支持的配置框架内，避免每次规则调整都修改代码。
+- 学生申报界面由“学年当前规则快照”生成，而不是直接读取可随时编辑的规则模板。
+- 已提交申报必须保留当时依据的学年、快照、规则项、字段值和材料记录，便于追溯。
+- 审核的最小业务颗粒度是一条申报记录，即 `application_record`，不是单个字段，也不是规则项模板。
+- 核算分两步：先计算每条审核通过申报的基础得分，再按规则树执行类内规则、上限、取最高、汇总，生成最终成绩。
+- 核算自动触发：某条申报最终审核通过后触发核算；规则快照变更且该学年已有通过申报时触发重算。
+- 公示发布的是某一次核算批次的固化结果，而不是实时变化的当前成绩。
+- 有业务数据的学年或规则集不做物理删除，只归档，避免破坏历史申报、核算、公示结果。
+
+整体业务链路如下：
+
+```text
+配置规则集
+  -> 发布规则集版本
+  -> 为学年绑定规则快照
+  -> 学生按快照申报并提交材料
+  -> 班委/学院管理员审核
+  -> 审核通过后自动核算
+  -> 生成单项得分、节点得分、总分排名
+  -> 发起公示并固化结果
+  -> 学生复查/异议
+  -> 必要时重新核算并记录分数变化
+```
+
+## 2. 核心建模结论
+
+### 2.1 学年、规则集、版本、快照
+
+`rule_set` 是管理员维护的规则集模板，类似“规则信息簿”。一个规则集可以有多个 `rule_set_version`。
+
+`academic_year` 表示一个综测学年。学年实际使用的不是规则集模板本身，而是 `academic_year_rule_snapshot`。快照在绑定规则版本时生成，记录当时完整规则树，后续申报、审核、核算都以该快照为依据。
+
+这样做的原因是：规则集模板可以继续调整，但已经开始申报或已经完成审核的数据不会因为模板变化而失去依据。
+
+### 2.2 规则树
+
+规则采用树状结构，由 `rule_node` 表保存。树节点通过 `parent_id` 表示父子关系。
+
+常用节点类型：
+
+| 节点类型 | 含义 |
+|---|---|
+| `total` | 总分根节点 |
+| `module` | 一级模块，如思想品德、学业成绩、学术创新、学生工作 |
+| `category` | 分类，如科研成果、竞赛获奖、岗位任职 |
+| `subcategory` | 子分类，如项目成果、论文成果、文体比赛类 |
+| `item` | 可申报或可核算的具体规则项 |
+
+规则项是否出现在学生申报界面，由 `rule_node.is_apply_entry` 决定。
+
+规则节点可以挂载以下配置：
+
+| 配置表 | 作用 |
+|---|---|
+| `rule_calculation_config` | 计分方式，如固定分、等级分、权重分、公式分、人工分 |
+| `rule_form_field` | 学生填报字段，用于生成申报表单 |
+| `material_requirement` | 证明材料要求 |
+| `audit_requirement` | 审核角色、审核说明、是否需要二级审核 |
+| `rule_scope` | 适用范围，如年级、专业、班级、学生类型 |
+| `group_distribution_rule` | 团体成果分配规则，如负责人、成员排名、前后 50% |
+
+### 2.3 申报和审核颗粒度
+
+申报和审核的最小颗粒度是一条 `application_record`。
+
+一条申报记录对应：
+
+- 一个学年：`academic_year_id`
+- 一个规则快照：`snapshot_id`
+- 一个可申报规则项：`rule_node_id`
+- 一组字段值：`application_field_value`
+- 一组证明材料：`application_attachment`
+- 可选团队成员：`application_member`
+- 多次提交版本：`application_revision`
+- 审核记录：`application_audit_record`
+
+### 2.4 核算颗粒度
+
+核算不是直接把申报分数加总，而是分层保存：
+
+| 层级 | 表 | 含义 |
+|---|---|---|
+| 申报项级 | `score_item_result` | 每条已审核通过申报的基础得分 |
+| 规则节点级 | `score_node_result` | 分类、子分类、模块经规则汇总后的得分 |
+| 学生总分级 | `score_total_result` | 某次核算批次下学生总分和排名 |
+
+这样可以清楚解释“某条申报本身值多少分”和“经过类内规则后最终计入多少分”之间的区别。
+
+## 3. 表分组说明
+
+### 3.1 学年与规则版本
+
+| 表名 | 用途 |
+|---|---|
+| `academic_year` | 综测学年，保存申报、审核、公示时间和当前规则快照 |
+| `rule_set` | 规则集模板 |
+| `rule_set_version` | 规则集版本，发布后可被学年绑定 |
+| `academic_year_rule_snapshot` | 学年规则快照，保存完整规则 JSON 和快照 hash |
+| `rule_operation_log` | 规则相关操作日志 |
+
+核心关系：
+
+```text
+rule_set 1 - n rule_set_version
+rule_set_version 1 - n academic_year_rule_snapshot
+academic_year 1 - 1 current academic_year_rule_snapshot
+```
+
+### 3.2 规则配置
+
+| 表名 | 用途 |
+|---|---|
+| `rule_node` | 规则树节点 |
+| `rule_calculation_config` | 节点计分配置 |
+| `rule_form_field` | 申报字段配置 |
+| `material_requirement` | 证明材料要求 |
+| `audit_requirement` | 审核要求 |
+| `rule_scope` | 规则适用范围 |
+| `group_distribution_rule` | 团体成果分配规则 |
+| `formula_template` | 系统允许使用的受控公式模板 |
+
+`rule_calculation_config.config_type` 目前支持 `fixed`、`level`、`quantity`、`step`、`weight`、`formula`、`manual`、`deduct` 等类型。公式不保存可执行代码，只通过 `formula_code` 引用系统内置模板。
+
+### 3.3 学生与用户
+
+| 表名 | 用途 |
+|---|---|
+| `student_profile` | 学生基础信息，用于学生列表、批量导入、详情、更新、统计维度 |
+| `system_user` | 系统用户，保存账号、角色、状态、关联学生 |
+| `system_operation_log` | 系统操作日志，记录学生、用户、规则、公示等操作 |
+
+### 3.4 申报、材料、审核
+
+| 表名 | 用途 |
+|---|---|
+| `application_record` | 学生申报主表 |
+| `application_field_value` | 申报字段值 |
+| `application_attachment` | 申报材料文件 |
+| `application_member` | 团体成果成员信息 |
+| `application_revision` | 每次提交/重新提交的快照 |
+| `application_operation_log` | 申报操作日志 |
+| `application_audit_record` | 审核记录 |
+| `audit_task` | 审核任务分配 |
+| `attachment_review_record` | 材料级审核记录 |
+| `audit_batch` | 批量审核操作记录 |
+
+### 3.5 智能核算
+
+| 表名 | 用途 |
+|---|---|
+| `score_calculation_batch` | 一次核算或重算批次 |
+| `calculation_task` | 核算任务记录 |
+| `calculation_error` | 核算错误 |
+| `calculation_warning` | 核算警告 |
+| `score_item_result` | 单条申报基础得分 |
+| `score_node_result` | 规则节点汇总得分 |
+| `score_total_result` | 学生总分、排名 |
+| `score_change_record` | 两次核算之间的分数变化 |
+
+### 3.6 结果、公示、异议
+
+| 表名 | 用途 |
+|---|---|
+| `publicity_batch` | 一次公示批次，引用某次核算批次 |
+| `publicity_result` | 公示时固化的学生结果 |
+| `appeal_record` | 学生异议或复查申请 |
+| `appeal_process_record` | 异议处理过程记录 |
+
+## 4. 主要状态设计
+
+### 4.1 学年状态
+
+`academic_year.status`：
+
+| 状态 | 含义 |
+|---|---|
+| `configuring` | 配置中 |
+| `applying` | 申报中 |
+| `auditing` | 审核中 |
+| `calculating` | 核算中 |
+| `publicizing` | 公示中 |
+| `appealing` | 异议/复查中 |
+| `archived` | 已归档 |
+
+### 4.2 申报状态
+
+`application_record.status`：
+
+| 状态 | 含义 |
+|---|---|
+| `draft` | 草稿 |
+| `submitted` | 已提交，待审核 |
+| `returned` | 退回修改 |
+| `approved` | 审核通过 |
+| `rejected` | 审核不通过 |
+| `withdrawn` | 已撤回 |
+
+### 4.3 公示状态
+
+`publicity_batch.status`：
+
+| 状态 | 含义 |
+|---|---|
+| `draft` | 草稿 |
+| `publicizing` | 公示中 |
+| `closed` | 已结束 |
+| `archived` | 已归档 |
+
+## 5. 删除与归档策略
+
+为了保护历史数据，系统采用“未使用可删除，已使用只归档”的策略。
+
+### 5.1 删除规则集
+
+当规则集没有被任何学年快照引用，也没有对应申报数据时，可以物理删除。删除时需要先删除规则树子节点，再删除版本和规则集。
+
+当规则集已经被快照或申报使用时，不物理删除，只将 `rule_set.status` 更新为 `archived`。
+
+### 5.2 删除学年
+
+当学年没有申报、核算、公示数据时，可以物理删除，并同时删除学年规则快照。
+
+当学年已有申报、核算或公示数据时，不物理删除，只将 `academic_year.status` 更新为 `archived`。
+
+## 6. 上层功能常用 SQL
+
+以下 SQL 使用 `?` 表示参数。
+
+### 6.1 获取规则集列表
+
+```sql
+SELECT
+  rs.*,
+  COUNT(v.id) AS version_count,
+  MAX(v.published_at) AS last_published_at
+FROM rule_set rs
+LEFT JOIN rule_set_version v ON v.rule_set_id = rs.id
+GROUP BY rs.id
+ORDER BY rs.updated_at DESC, rs.id DESC;
+```
+
+### 6.2 获取某规则集版本列表
+
+```sql
+SELECT *
+FROM rule_set_version
+WHERE rule_set_id = ?
+ORDER BY created_at DESC, id DESC;
+```
+
+### 6.3 获取规则树
+
+```sql
+WITH RECURSIVE rule_tree AS (
+  SELECT
+    id, parent_id, rule_set_version_id, node_type, code, name,
+    max_score, aggregation_type, is_apply_entry, sort_order,
+    0 AS depth,
+    CAST(LPAD(sort_order, 6, '0') AS CHAR(1000)) AS path
+  FROM rule_node
+  WHERE rule_set_version_id = ?
+    AND parent_id IS NULL
+
+  UNION ALL
+
+  SELECT
+    n.id, n.parent_id, n.rule_set_version_id, n.node_type, n.code, n.name,
+    n.max_score, n.aggregation_type, n.is_apply_entry, n.sort_order,
+    t.depth + 1,
+    CONCAT(t.path, '/', LPAD(n.sort_order, 6, '0'), '-', n.id)
+  FROM rule_node n
+  JOIN rule_tree t ON n.parent_id = t.id
+)
+SELECT *
+FROM rule_tree
+ORDER BY path;
+```
+
+### 6.4 获取某节点配置
+
+```sql
+SELECT *
+FROM rule_calculation_config
+WHERE node_id = ?
+ORDER BY sort_order, id;
+
+SELECT *
+FROM rule_form_field
+WHERE node_id = ?
+ORDER BY sort_order, id;
+
+SELECT *
+FROM material_requirement
+WHERE node_id = ?
+ORDER BY id;
+
+SELECT *
+FROM audit_requirement
+WHERE node_id = ?
+ORDER BY id;
+```
+
+### 6.5 获取学年列表和当前快照
+
+```sql
+SELECT
+  y.*,
+  s.rule_set_version_id
+FROM academic_year y
+LEFT JOIN academic_year_rule_snapshot s ON s.id = y.current_snapshot_id
+ORDER BY y.created_at DESC, y.id DESC;
+```
+
+### 6.6 为学年绑定规则快照
+
+```sql
+UPDATE academic_year_rule_snapshot
+SET status = 'replaced', current_marker = NULL
+WHERE academic_year_id = ?
+  AND current_marker = 1;
+
+INSERT INTO academic_year_rule_snapshot (
+  academic_year_id,
+  rule_set_version_id,
+  snapshot_json,
+  snapshot_hash,
+  status,
+  current_marker
+)
+VALUES (?, ?, ?, SHA2(?, 256), 'active', 1);
+
+UPDATE academic_year
+SET current_snapshot_id = ?
+WHERE id = ?;
+```
+
+### 6.7 获取学生端可申报入口
+
+```sql
+SELECT n.*
+FROM academic_year y
+JOIN academic_year_rule_snapshot s ON s.id = y.current_snapshot_id
+JOIN rule_node n ON n.rule_set_version_id = s.rule_set_version_id
+WHERE y.id = ?
+  AND n.is_apply_entry = 1
+  AND n.status = 'enabled'
+ORDER BY n.sort_order, n.id;
+```
+
+### 6.8 获取学生申报列表
+
+```sql
+SELECT
+  a.id,
+  a.academic_year_id,
+  a.student_id,
+  a.title,
+  a.status,
+  a.submitted_at,
+  a.approved_at,
+  n.name AS rule_name,
+  n.code AS rule_code
+FROM application_record a
+JOIN rule_node n ON n.id = a.rule_node_id
+WHERE a.academic_year_id = ?
+  AND a.student_id = ?
+ORDER BY a.created_at DESC, a.id DESC;
+```
+
+### 6.9 获取申报详情
+
+```sql
+SELECT *
+FROM application_record
+WHERE id = ?;
+
+SELECT *
+FROM application_field_value
+WHERE application_id = ?
+ORDER BY id;
+
+SELECT *
+FROM application_attachment
+WHERE application_id = ?
+ORDER BY id;
+
+SELECT *
+FROM application_member
+WHERE application_id = ?
+ORDER BY rank_no, id;
+
+SELECT *
+FROM application_revision
+WHERE application_id = ?
+ORDER BY revision_no;
+
+SELECT *
+FROM application_audit_record
+WHERE application_id = ?
+ORDER BY audited_at;
+```
+
+### 6.10 审核待办列表
+
+```sql
+SELECT
+  a.id,
+  a.academic_year_id,
+  a.student_id,
+  a.title,
+  a.status,
+  a.audit_stage,
+  a.current_auditor_role,
+  a.submitted_at,
+  n.name AS rule_name,
+  n.code AS rule_code
+FROM application_record a
+JOIN rule_node n ON n.id = a.rule_node_id
+WHERE a.status = 'submitted'
+  AND (? IS NULL OR a.academic_year_id = ?)
+  AND (? IS NULL OR a.current_auditor_role = ?)
+ORDER BY a.submitted_at ASC, a.id ASC;
+```
+
+### 6.11 审核通过后触发核算的数据范围
+
+```sql
+SELECT
+  a.id,
+  a.student_id,
+  a.rule_node_id,
+  a.snapshot_id,
+  n.code,
+  n.name
+FROM application_record a
+JOIN rule_node n ON n.id = a.rule_node_id
+WHERE a.academic_year_id = ?
+  AND a.status = 'approved';
+```
+
+### 6.12 核算读取字段值和计分配置
+
+```sql
+SELECT field_key, field_value
+FROM application_field_value
+WHERE application_id = ?;
+
+SELECT *
+FROM rule_calculation_config
+WHERE node_id = ?
+ORDER BY sort_order, id;
+```
+
+### 6.13 查询核算批次
+
+```sql
+SELECT
+  b.*,
+  COUNT(t.id) AS result_count
+FROM score_calculation_batch b
+LEFT JOIN score_total_result t ON t.batch_id = b.id
+GROUP BY b.id
+ORDER BY b.created_at DESC, b.id DESC;
+```
+
+### 6.14 查询某批次最终成绩
+
+```sql
+SELECT
+  t.*,
+  s.student_no,
+  s.name,
+  s.grade,
+  s.major,
+  COALESCE(s.administrative_class, s.class_name) AS class_name
+FROM score_total_result t
+LEFT JOIN student_profile s
+  ON s.id = t.student_id OR CAST(s.student_no AS UNSIGNED) = t.student_id
+WHERE t.batch_id = ?
+ORDER BY t.rank_no ASC, t.total_score DESC;
+```
+
+### 6.15 查询学生得分明细
+
+```sql
+SELECT
+  r.*,
+  n.name AS rule_name,
+  n.code AS rule_code
+FROM score_item_result r
+JOIN rule_node n ON n.id = r.rule_node_id
+WHERE r.batch_id = ?
+  AND r.student_id = ?
+ORDER BY n.sort_order, r.id;
+
+SELECT
+  r.*,
+  n.name AS node_name,
+  n.code AS node_code,
+  n.node_type
+FROM score_node_result r
+JOIN rule_node n ON n.id = r.rule_node_id
+WHERE r.batch_id = ?
+  AND r.student_id = ?
+ORDER BY n.sort_order, n.id;
+```
+
+### 6.16 行政班得分统计
+
+```sql
+SELECT
+  s.grade,
+  s.major,
+  COALESCE(s.administrative_class, s.class_name) AS class_name,
+  COUNT(*) AS student_count,
+  ROUND(AVG(t.total_score), 3) AS avg_score,
+  MAX(t.total_score) AS max_score,
+  MIN(t.total_score) AS min_score
+FROM score_total_result t
+LEFT JOIN student_profile s
+  ON s.id = t.student_id OR CAST(s.student_no AS UNSIGNED) = t.student_id
+WHERE t.batch_id = ?
+  AND (? IS NULL OR s.grade = ?)
+  AND (? IS NULL OR s.major = ?)
+GROUP BY s.grade, s.major, COALESCE(s.administrative_class, s.class_name)
+ORDER BY s.grade, s.major, class_name;
+```
+
+### 6.17 发起公示并固化结果
+
+```sql
+INSERT INTO publicity_batch (
+  academic_year_id,
+  calculation_batch_id,
+  publicity_round,
+  start_time,
+  end_time,
+  status,
+  created_by
+)
+VALUES (?, ?, ?, NOW(), ?, 'publicizing', ?);
+
+INSERT INTO publicity_result (
+  publicity_batch_id,
+  student_id,
+  total_score,
+  rank_no,
+  detail_snapshot_json
+)
+SELECT
+  ?,
+  student_id,
+  total_score,
+  rank_no,
+  JSON_OBJECT(
+    'batch_id', batch_id,
+    'academic_year_id', academic_year_id,
+    'status', status
+  )
+FROM score_total_result
+WHERE batch_id = ?;
+```
+
+### 6.18 查询公示状态
+
+```sql
+SELECT *
+FROM publicity_batch
+WHERE academic_year_id = ?
+ORDER BY publicity_round DESC, id DESC
+LIMIT 1;
+```
+
+### 6.19 结束公示
+
+```sql
+UPDATE publicity_batch
+SET status = 'closed', end_time = NOW()
+WHERE id = ?;
+
+UPDATE academic_year
+SET status = 'appealing', publicity_end_time = NOW()
+WHERE id = ?;
+```
+
+### 6.20 查询学生列表
+
+```sql
+SELECT *
+FROM student_profile
+WHERE (? IS NULL OR student_no LIKE CONCAT('%', ?, '%') OR name LIKE CONCAT('%', ?, '%'))
+  AND (? IS NULL OR grade = ?)
+  AND (? IS NULL OR major = ?)
+  AND (? IS NULL OR class_name = ? OR administrative_class = ?)
+ORDER BY grade DESC, major, class_name, student_no
+LIMIT ? OFFSET ?;
+```
+
+### 6.21 查询学生详情
+
+```sql
+SELECT *
+FROM student_profile
+WHERE id = ?;
+
+SELECT
+  a.id,
+  a.academic_year_id,
+  y.name AS academic_year_name,
+  a.title,
+  a.status,
+  n.name AS rule_name,
+  n.code AS rule_code
+FROM application_record a
+JOIN academic_year y ON y.id = a.academic_year_id
+JOIN rule_node n ON n.id = a.rule_node_id
+WHERE a.student_id = ?
+ORDER BY a.created_at DESC;
+
+SELECT
+  t.*,
+  y.name AS academic_year_name
+FROM score_total_result t
+JOIN academic_year y ON y.id = t.academic_year_id
+WHERE t.student_id = ?
+ORDER BY t.created_at DESC;
+```
+
+### 6.22 查询用户列表
+
+```sql
+SELECT
+  u.*,
+  s.student_no,
+  s.name AS student_name
+FROM system_user u
+LEFT JOIN student_profile s ON s.id = u.related_student_id
+WHERE (? IS NULL OR u.username LIKE CONCAT('%', ?, '%') OR u.display_name LIKE CONCAT('%', ?, '%'))
+  AND (? IS NULL OR u.role = ?)
+  AND (? IS NULL OR u.status = ?)
+ORDER BY u.created_at DESC, u.id DESC
+LIMIT ? OFFSET ?;
+```
+
+### 6.23 查询系统操作日志
+
+```sql
+SELECT *
+FROM system_operation_log
+WHERE (? IS NULL OR module = ?)
+  AND (? IS NULL OR operation_type = ?)
+ORDER BY created_at DESC, id DESC
+LIMIT ? OFFSET ?;
+```
+
+## 7. 对核心业务的支撑结论
+
+### 7.1 支撑规则配置
+
+规则树由 `rule_node` 表表达，规则项分类、类内规则、规则项、团体分配规则都可以通过节点类型和挂载配置表达。管理员新增、删除、归档规则集，实际操作的是 `rule_set`、`rule_set_version` 和规则树配置。
+
+### 7.2 支撑申报和材料提交
+
+学生申报界面由 `rule_node`、`rule_form_field`、`material_requirement` 生成。提交数据进入 `application_record`、`application_field_value`、`application_attachment`、`application_member`，并通过 `application_revision` 固化提交版本。
+
+### 7.3 支撑审核
+
+审核依据来自 `audit_requirement`。审核动作写入 `application_audit_record`，申报当前状态写回 `application_record.status`。退回、拒绝、通过都可追溯。
+
+### 7.4 支撑智能核算
+
+核算以审核通过的申报为输入，按规则项计分后写入 `score_item_result`，再沿规则树汇总到 `score_node_result`，最后写入 `score_total_result`。核算错误和警告分别进入 `calculation_error`、`calculation_warning`。
+
+### 7.5 支撑结果统计、公示、复查、异议、导出
+
+统计和导出读取 `score_total_result` 并关联 `student_profile`。公示由 `publicity_batch` 发起，并将当次成绩复制到 `publicity_result`。异议通过 `appeal_record` 和 `appeal_process_record` 追踪。如果处理后需要重算，可以生成新的 `score_calculation_batch`，并用 `score_change_record` 记录变化。
+
+### 7.6 支撑系统管理
+
+学生管理由 `student_profile` 支撑，用户管理由 `system_user` 支撑，批量导入可直接写入对应表。所有关键操作写入 `system_operation_log`，用于审计和排查。
