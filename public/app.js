@@ -1,3 +1,4 @@
+// 使用单一前端状态保存当前选择，确保用户在规则、申报、审核、核算和结果页切换时状态一致。
 const state = {
   ruleSets: [],
   versions: [],
@@ -6,7 +7,7 @@ const state = {
   selectedVersionId: null,
   tree: [],
   selectedNode: null,
-  activeTab: "node",
+  activeTab: "rules",
   applyEntries: [],
   selectedApplyEntry: null,
   applyApplications: [],
@@ -87,6 +88,11 @@ function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function ruleNodeTypeLabel(node) {
+  if (node.node_type === "item") return "规则项";
+  return node.parent_id ? "汇总节点" : "根汇总节点";
 }
 
 function statusLabel(status) {
@@ -445,9 +451,9 @@ function renderTree() {
       btn.innerHTML = `
         <div>
           <div class="node-name">${node.name}</div>
-          <div class="node-meta">${node.code} · ${node.node_type} · ${node.aggregation_type || "无汇总"}</div>
+          <div class="node-meta">${node.code} · ${ruleNodeTypeLabel(node)} · ${node.aggregation_type || "无汇总"}</div>
         </div>
-        <span class="tag">${node.max_score ?? "-"} 分</span>
+        <span class="tag">${node.node_type === "aggregate" ? `${node.max_score ?? "不限"} 分上限` : "按计分配置"}</span>
       `;
       btn.onclick = () => {
         state.selectedNode = node;
@@ -467,7 +473,7 @@ function renderParentSelect() {
   const select = $("#parentSelect");
   const flat = flattenTree(state.tree);
   select.innerHTML = `<option value="">无父节点</option>`;
-  for (const node of flat) {
+  for (const node of flat.filter((item) => item.node_type === "aggregate")) {
     const option = document.createElement("option");
     option.value = node.id;
     option.textContent = `${"  ".repeat(node.depth)}${node.name}`;
@@ -478,6 +484,8 @@ function renderParentSelect() {
 
 function renderNodeDetails() {
   const box = $("#selectedNodeBox");
+  const deleteButton = $("#deleteNodeBtn");
+  if (deleteButton) deleteButton.disabled = !state.selectedNode;
   if (!state.selectedNode) {
     box.textContent = "尚未选择节点";
     return;
@@ -489,7 +497,7 @@ function renderNodeDetails() {
   };
   box.innerHTML = `
     <strong>${node.name}</strong>
-    <div class="node-meta">${node.code} · ${node.node_type} · ${node.is_apply_entry ? "可申报" : "不可申报"}</div>
+    <div class="node-meta">${node.code} · ${ruleNodeTypeLabel(node)} · ${node.is_apply_entry ? "可申报" : "不可申报"}</div>
     ${detail("计分配置", node.calculation_configs, (row) => `<div class="detail-line">${row.config_type} ${row.formula_code || ""}<br>${JSON.stringify(row.config_json)}</div>`)}
     ${detail("申报字段", node.form_fields, (row) => `<div class="detail-line">${row.field_label} (${row.field_key}) · ${row.field_type}</div>`)}
     ${detail("材料要求", node.material_requirements, (row) => `<div class="detail-line">${row.material_name} · ${row.file_type_limit || "不限"} · ${row.max_file_count}份</div>`)}
@@ -516,21 +524,9 @@ function renderTitle() {
     : "创建示例数据后，可以验证规则树和配置项是否落表。";
 }
 
-function renderYearsWithDelete() {
-  const select = $("#yearSelect");
-  select.innerHTML = "";
-  for (const year of state.years) {
-    const option = document.createElement("option");
-    option.value = year.id;
-    option.textContent = `${year.name}${year.rule_set_version_id ? " · 已绑定规则" : ""}`;
-    select.appendChild(option);
-  }
-  $("#yearList").innerHTML = state.years
-    .map((year) => `<div><strong>${year.name}</strong><br><span>${year.status} · 快照 ${year.current_snapshot_id || "未绑定"}</span></div>`)
-    .join("");
-}
-
 function renderYears() {
+  // 普通删除会归档已有业务数据的学年；独立的红色按钮调用最高管理员接口，
+  // 并要求再次输入完整学年名称确认。
   const select = $("#yearSelect");
   if (select) {
     select.innerHTML = "";
@@ -563,18 +559,47 @@ function renderYears() {
     del.className = "danger-btn";
     del.textContent = "删除/归档";
     del.onclick = async () => {
-      if (!confirm(`确认删除/归档学年：${year.name}？`)) return;
-      const result = await api(`/api/academic-years/${year.id}`, { method: "DELETE" });
-      await loadYears();
-      toast(result.deleted ? "学年已删除" : "学年已有业务数据，已归档");
+      try {
+        if (!confirm(`确认删除/归档学年：${year.name}？`)) return;
+        const result = await api(`/api/academic-years/${year.id}`, { method: "DELETE" });
+        await loadYears();
+        renderAll();
+        toast(result.deleted ? "学年已删除" : "学年已有业务数据，已归档");
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+    const forceDelete = document.createElement("button");
+    forceDelete.className = "danger-btn danger-solid";
+    forceDelete.textContent = "彻底删除";
+    forceDelete.title = "仅最高管理员可用，将删除该学年的全部业务数据";
+    forceDelete.onclick = async () => {
+      try {
+        const operatorId = prompt("请输入最高管理员用户 ID");
+        if (!operatorId) return;
+        const confirmName = prompt(`此操作不可恢复。请输入学年名称“${year.name}”确认：`);
+        if (confirmName !== year.name) {
+          toast("学年名称不一致，已取消删除");
+          return;
+        }
+        const result = await api(
+          `/api/academic-years/${year.id}?force=true&confirmName=${encodeURIComponent(confirmName)}`,
+          { method: "DELETE", headers: { "X-Operator-Id": operatorId } }
+        );
+        if (Number(state.selectedApplyYearId) === Number(year.id)) state.selectedApplyYearId = null;
+        await loadYears();
+        renderAll();
+        toast(`学年已彻底删除，共清理 ${result.deleted_data.application_count} 条申报`);
+      } catch (error) {
+        toast(error.message);
+      }
     };
     row.appendChild(document.createElement("br"));
     row.appendChild(del);
+    row.appendChild(forceDelete);
     list.appendChild(row);
   }
 }
-
-renderYears = renderYearsWithDelete;
 
 function applicationFieldMap(application) {
   const map = new Map();
@@ -1197,6 +1222,7 @@ async function wireEvents() {
     event.preventDefault();
     requireVersion();
     const data = formData(event.target);
+    const isAggregate = data.nodeType === "aggregate";
     await api(`/api/rule-versions/${state.selectedVersionId}/nodes`, {
       method: "POST",
       body: JSON.stringify({
@@ -1204,8 +1230,8 @@ async function wireEvents() {
         nodeType: data.nodeType,
         code: data.code,
         name: data.name,
-        maxScore: data.maxScore || null,
-        aggregationType: data.aggregationType || null,
+        maxScore: isAggregate ? data.maxScore || null : null,
+        aggregationType: isAggregate ? data.aggregationType || null : null,
         isApplyEntry: Boolean(data.isApplyEntry),
         sortOrder: Number(data.sortOrder || 0),
         description: data.description
@@ -1214,6 +1240,45 @@ async function wireEvents() {
     await loadTree();
     toast("规则节点已添加");
     event.target.reset();
+    syncNodeTypeControls();
+  };
+
+  const nodeTypeSelect = $("#nodeForm [name='nodeType']");
+  const applyEntryCheckbox = $("#nodeForm [name='isApplyEntry']");
+  const maxScoreInput = $("#nodeForm [name='maxScore']");
+  const aggregationTypeSelect = $("#nodeForm [name='aggregationType']");
+  const aggregateMaxScoreField = $("#aggregateMaxScoreField");
+  const aggregateTypeField = $("#aggregateTypeField");
+  const syncNodeTypeControls = () => {
+    // 字段 max_score 和 aggregation_type 只描述汇总节点；规则项分值在“节点配置”页单独维护。
+    const isItem = nodeTypeSelect.value === "item";
+    applyEntryCheckbox.disabled = !isItem;
+    if (!isItem) applyEntryCheckbox.checked = false;
+    aggregateMaxScoreField.hidden = isItem;
+    aggregateTypeField.hidden = isItem;
+    maxScoreInput.disabled = isItem;
+    aggregationTypeSelect.disabled = isItem;
+    if (isItem) {
+      maxScoreInput.value = "";
+      aggregationTypeSelect.value = "";
+    }
+  };
+  nodeTypeSelect.onchange = syncNodeTypeControls;
+  syncNodeTypeControls();
+
+  $("#deleteNodeBtn").onclick = async () => {
+    try {
+      requireNode();
+      const node = state.selectedNode;
+      const scope = node.children?.length ? "及其全部下级节点" : "";
+      if (!confirm(`确认删除“${node.name}”${scope}？已有申报或核算引用时系统会拒绝删除。`)) return;
+      const result = await api(`/api/rule-nodes/${node.id}`, { method: "DELETE" });
+      state.selectedNode = null;
+      await loadTree();
+      toast(`已删除 ${result.deleted_node_count} 个节点`);
+    } catch (error) {
+      toast(error.message);
+    }
   };
 
   $("#calcForm").onsubmit = async (event) => {

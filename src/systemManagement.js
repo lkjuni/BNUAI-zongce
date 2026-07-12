@@ -2,6 +2,9 @@ import crypto from "node:crypto";
 import { query, transaction } from "./db.js";
 import { buildXlsx, parseXlsx, rowsToObjects } from "./xlsxLite.js";
 
+// 负责学生、用户等管理数据和操作日志。表格文件使用 base64 放入 JSON，
+// 以保持接口轻量并避免额外引入 multipart 依赖。
+
 function makeError(status, message, details = undefined) {
   const error = new Error(message);
   error.status = status;
@@ -38,6 +41,7 @@ function parseUploadedRows(body) {
 }
 
 async function logOperation(connOrNull, detail) {
+  // 日志需要与业务操作一起提交时复用现有事务连接，否则使用共享连接池。
   const executor = connOrNull || { execute: (sql, params) => query(sql, params) };
   const params = [
     detail.operatorId || null,

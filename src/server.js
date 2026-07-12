@@ -9,6 +9,9 @@ import { handleResultManagementApi } from "./resultManagement.js";
 import { handleSystemManagementApi, logOperation } from "./systemManagement.js";
 import { seedDefaultRuleSet } from "./defaultRuleSet.js";
 
+// 应用入口：负责 HTTP 路由、规则/学年生命周期和静态文件等跨模块能力。
+// 申报、审核核算、结果和系统管理等具体业务分别放在独立模块中。
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
@@ -58,11 +61,184 @@ function toBool(value) {
   return value === true || value === 1 || value === "1";
 }
 
+function httpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function normalizeRuleNodeType(value) {
+  // 兼容仍在发送旧固定层级类型的接口调用；入库前统一转换为 aggregate，
+  // 使规则层级只由 parent_id 决定。
+  if (["aggregate", "total", "module", "category", "subcategory"].includes(value)) {
+    return "aggregate";
+  }
+  if (value === "item") return "item";
+  throw httpError(400, "节点类型只能是 aggregate（汇总节点）或 item（规则项）");
+}
+
+function normalizeParentId(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parentId = Number(value);
+  if (!Number.isInteger(parentId) || parentId <= 0) {
+    throw httpError(400, "父节点 ID 不合法");
+  }
+  return parentId;
+}
+
+async function validateRuleNodeStructure({ versionId, nodeId = null, parentId, nodeType, isApplyEntry }) {
+  // 外键负责保护数据引用，下面的校验负责保护单行约束无法表达的树结构语义。
+  const normalizedType = normalizeRuleNodeType(nodeType);
+
+  if (normalizedType === "aggregate" && isApplyEntry) {
+    throw httpError(400, "汇总节点不能作为申报入口，请新建下级规则项");
+  }
+  if (normalizedType === "item" && parentId === null) {
+    throw httpError(400, "规则项不能作为根节点，必须挂在汇总节点下");
+  }
+
+  const [version] = await query("SELECT id FROM rule_set_version WHERE id = :versionId", { versionId });
+  if (!version) throw httpError(404, "规则版本不存在");
+
+  if (parentId === null) {
+    const [existingRoot] = await query(
+      `SELECT id FROM rule_node
+       WHERE rule_set_version_id = :versionId
+         AND parent_id IS NULL
+         AND (:nodeId IS NULL OR id <> :nodeId)
+       LIMIT 1`,
+      { versionId, nodeId }
+    );
+    if (existingRoot) throw httpError(409, "每个规则版本只能有一个根节点");
+  } else {
+    if (nodeId !== null && parentId === nodeId) {
+      throw httpError(400, "节点不能把自己设为父节点");
+    }
+    const [parent] = await query(
+      `SELECT id, rule_set_version_id, node_type FROM rule_node WHERE id = :parentId`,
+      { parentId }
+    );
+    if (!parent) throw httpError(400, "父节点不存在");
+    if (Number(parent.rule_set_version_id) !== Number(versionId)) {
+      throw httpError(400, "父节点必须属于同一个规则版本");
+    }
+    if (normalizeRuleNodeType(parent.node_type) !== "aggregate") {
+      throw httpError(400, "规则项不能包含子节点，请选择汇总节点作为父节点");
+    }
+
+    if (nodeId !== null) {
+      const [cycle] = await query(
+        `WITH RECURSIVE descendants AS (
+           SELECT id FROM rule_node WHERE parent_id = :nodeId
+           UNION ALL
+           SELECT n.id FROM rule_node n JOIN descendants d ON n.parent_id = d.id
+         )
+         SELECT id FROM descendants WHERE id = :parentId LIMIT 1`,
+        { nodeId, parentId }
+      );
+      if (cycle) throw httpError(400, "不能把节点移动到自己的下级，规则树不允许成环");
+    }
+  }
+
+  if (nodeId !== null && normalizedType === "item") {
+    const [child] = await query("SELECT id FROM rule_node WHERE parent_id = :nodeId LIMIT 1", { nodeId });
+    if (child) throw httpError(409, "仍有子节点，不能将该节点改为规则项");
+  }
+
+  return normalizedType;
+}
+
 function clientIp(req) {
   return req.socket.remoteAddress;
 }
 
+async function requireSuperAdmin(conn, req) {
+  // 当前原型尚未接入登录会话，因此根据操作者 ID 查询 system_user，
+  // 不直接信任浏览器传入的角色字符串。
+  const operatorId = Number(req.headers["x-operator-id"]);
+  if (!Number.isInteger(operatorId) || operatorId <= 0) {
+    throw httpError(403, "彻底删除学年需要提供最高管理员用户 ID");
+  }
+  const [operator] = await conn.execute(
+    `SELECT id, username, display_name, role, status
+     FROM system_user
+     WHERE id = ?`,
+    [operatorId]
+  );
+  const user = operator[0];
+  if (!user || user.status !== "active" || user.role !== "super_admin") {
+    throw httpError(403, "只有状态正常的最高管理员可以彻底删除学年");
+  }
+  return user;
+}
+
+async function deleteRuleNode(nodeId, req) {
+  // 仅当整棵配置子树未被申报或历史成绩引用时才允许删除，
+  // 已被使用的规则必须保留，确保历史成绩仍然可以解释和追溯。
+  return transaction(async (conn) => {
+    const [nodeRows] = await conn.execute(
+      `SELECT id, rule_set_version_id, code, name FROM rule_node WHERE id = ?`,
+      [nodeId]
+    );
+    const node = nodeRows[0];
+    if (!node) throw httpError(404, "规则节点不存在");
+
+    const [subtree] = await conn.execute(
+      `WITH RECURSIVE nodes AS (
+         SELECT id, parent_id, 0 AS depth FROM rule_node WHERE id = ?
+         UNION ALL
+         SELECT n.id, n.parent_id, nodes.depth + 1
+         FROM rule_node n
+         JOIN nodes ON n.parent_id = nodes.id
+       )
+       SELECT id, depth FROM nodes ORDER BY depth DESC, id DESC`,
+      [nodeId]
+    );
+    const nodeIds = subtree.map((row) => Number(row.id));
+    const placeholders = nodeIds.map(() => "?").join(",");
+    const [usageRows] = await conn.execute(
+      `SELECT
+         (SELECT COUNT(*) FROM application_record WHERE rule_node_id IN (${placeholders})) AS application_count,
+         (SELECT COUNT(*) FROM score_item_result WHERE rule_node_id IN (${placeholders})) AS item_result_count,
+         (SELECT COUNT(*) FROM score_node_result WHERE rule_node_id IN (${placeholders})) AS node_result_count`,
+      [...nodeIds, ...nodeIds, ...nodeIds]
+    );
+    const usage = usageRows[0];
+    const used = Object.values(usage).some((value) => Number(value) > 0);
+    if (used) {
+      throw httpError(409, "该节点或其下级已有申报/核算数据，不能删除；请新建规则版本后调整");
+    }
+
+    const [yearRows] = await conn.execute(
+      `SELECT y.id
+       FROM academic_year y
+       JOIN academic_year_rule_snapshot s ON s.id = y.current_snapshot_id
+       WHERE s.rule_set_version_id = ?`,
+      [node.rule_set_version_id]
+    );
+
+    for (const row of subtree) {
+      await conn.execute("DELETE FROM rule_node WHERE id = ?", [row.id]);
+    }
+    await logOperation(conn, {
+      module: "rule",
+      operationType: "delete_rule_node_subtree",
+      targetType: "rule_node",
+      targetId: nodeId,
+      operationDetail: { code: node.code, name: node.name, deleted_node_count: subtree.length },
+      ipAddress: clientIp(req)
+    });
+    return {
+      id: nodeId,
+      deleted_node_count: subtree.length,
+      affected_academic_year_ids: yearRows.map((row) => Number(row.id))
+    };
+  });
+}
+
 async function deleteRuleSetConfigTree(conn, ruleSetId) {
+  // 规则节点表 rule_node 使用自引用 RESTRICT 外键，物理删除未使用规则集时，
+  // 必须先删除下级节点，再删除父节点。
   const [versions] = await conn.execute("SELECT id FROM rule_set_version WHERE rule_set_id = ?", [ruleSetId]);
   const versionIds = versions.map((row) => Number(row.id));
   if (!versionIds.length) {
@@ -150,6 +326,7 @@ async function deleteRuleSet(ruleSetId, req) {
 }
 
 async function deleteAcademicYear(academicYearId, req) {
+  // 普通管理员使用安全删除：未使用学年可物理删除，已有业务历史的学年只归档。
   return transaction(async (conn) => {
     const [usage] = await conn.execute(
       `SELECT
@@ -186,7 +363,91 @@ async function deleteAcademicYear(academicYearId, req) {
   });
 }
 
+async function forceDeleteAcademicYear(academicYearId, confirmName, req) {
+  // 不可恢复的彻底删除与普通删除明确分离。数据库记录在事务中统一删除；
+  // 文件系统无法参与 MySQL 回滚，因此证明材料只能在事务提交后清理。
+  const result = await transaction(async (conn) => {
+    const operator = await requireSuperAdmin(conn, req);
+    const [yearRows] = await conn.execute("SELECT id, name FROM academic_year WHERE id = ? FOR UPDATE", [academicYearId]);
+    const year = yearRows[0];
+    if (!year) throw httpError(404, "学年不存在");
+    if (!confirmName || confirmName !== year.name) {
+      throw httpError(400, "确认名称不一致，已取消彻底删除");
+    }
+
+    const [usageRows] = await conn.execute(
+      `SELECT
+         (SELECT COUNT(*) FROM application_record WHERE academic_year_id = ?) AS application_count,
+         (SELECT COUNT(*) FROM score_calculation_batch WHERE academic_year_id = ?) AS calculation_count,
+         (SELECT COUNT(*) FROM publicity_batch WHERE academic_year_id = ?) AS publicity_count,
+         (SELECT COUNT(*) FROM appeal_record a JOIN publicity_batch p ON p.id = a.publicity_batch_id WHERE p.academic_year_id = ?) AS appeal_count,
+         (SELECT COUNT(*) FROM academic_year_rule_snapshot WHERE academic_year_id = ?) AS snapshot_count`,
+      [academicYearId, academicYearId, academicYearId, academicYearId, academicYearId]
+    );
+    const usage = usageRows[0];
+    const [applicationRows] = await conn.execute(
+      "SELECT id FROM application_record WHERE academic_year_id = ?",
+      [academicYearId]
+    );
+
+    await conn.execute(
+      `DELETE a FROM appeal_record a
+       JOIN publicity_batch p ON p.id = a.publicity_batch_id
+       WHERE p.academic_year_id = ?`,
+      [academicYearId]
+    );
+    await conn.execute("DELETE FROM publicity_batch WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM score_change_record WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM score_calculation_batch WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM application_record WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM audit_batch WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM audit_task WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("UPDATE academic_year SET current_snapshot_id = NULL WHERE id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM academic_year_rule_snapshot WHERE academic_year_id = ?", [academicYearId]);
+    await conn.execute("DELETE FROM academic_year WHERE id = ?", [academicYearId]);
+
+    await logOperation(conn, {
+      operatorId: operator.id,
+      operatorName: operator.display_name || operator.username,
+      module: "year",
+      operationType: "force_delete_academic_year",
+      targetType: "academic_year",
+      targetId: academicYearId,
+      operationDetail: { academic_year_name: year.name, ...usage },
+      ipAddress: clientIp(req)
+    });
+    return {
+      id: academicYearId,
+      name: year.name,
+      force_deleted: true,
+      deleted_data: usage,
+      deleted_application_ids: applicationRows.map((row) => Number(row.id))
+    };
+  });
+
+  const applicationRoot = path.resolve(uploadDir, "applications");
+  let deletedFileDirectoryCount = 0;
+  const fileCleanupErrors = [];
+  for (const applicationId of result.deleted_application_ids) {
+    const target = path.resolve(applicationRoot, String(applicationId));
+    const relative = path.relative(applicationRoot, target);
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+    try {
+      await fs.access(target);
+      await fs.rm(target, { recursive: true, force: true });
+      deletedFileDirectoryCount += 1;
+    } catch (error) {
+      if (error.code !== "ENOENT") fileCleanupErrors.push({ application_id: applicationId, message: error.message });
+    }
+  }
+  delete result.deleted_application_ids;
+  result.deleted_file_directory_count = deletedFileDirectoryCount;
+  result.file_cleanup_errors = fileCleanupErrors;
+  return result;
+}
+
 async function getVersionTree(versionId) {
+  // 批量读取节点及其挂载配置，再在内存中组装邻接树，避免逐节点查询数据库。
   const nodes = await query(
     `SELECT *
      FROM rule_node
@@ -248,6 +509,7 @@ async function getVersionTree(versionId) {
 }
 
 async function snapshotVersion(versionId) {
+  // 将发布时的完整配置保存为 JSON 快照，便于后续复查学生当时看到的规则依据。
   const [version] = await query(
     `SELECT v.*, rs.name AS rule_set_name, rs.college_id
      FROM rule_set_version v
@@ -279,6 +541,8 @@ async function approvedApplicationCount(academicYearId) {
 }
 
 async function bindAcademicYearSnapshot(academicYearId, ruleSetVersionId, operatorId = 1) {
+  // 重新绑定会生成新的不可变快照；若学年已有审核通过的申报，
+  // 规则依据变化后立即触发全量重算。
   const snapshot = await snapshotVersion(ruleSetVersionId);
   const snapshotJson = JSON.stringify(snapshot);
   const data = await transaction(async (conn) => {
@@ -340,29 +604,29 @@ async function seedDemo() {
       return result.insertId;
     }
 
-    const total = await node(null, "total", "total", "综合测评总分", 105, "sum", 0, 1, "思想品德 + 学业成绩 + 学术创新成果 + 学生工作");
-    await node(total, "module", "moral", "思想品德", 5, "deduct", 0, 10);
-    await node(total, "module", "academic", "学业成绩", 86, "formula", 0, 20);
-    const innovation = await node(total, "module", "innovation", "学术创新成果", 7, "cap", 0, 30, "同一子类别取最高，不同子类别可累加");
-    const research = await node(innovation, "category", "innovation.research", "科研成果", null, "sum", 0, 10);
-    await node(research, "subcategory", "innovation.research.project", "项目成果", null, "max", 0, 10);
-    const paper = await node(research, "subcategory", "innovation.research.paper", "论文成果", null, "max", 0, 20);
+    const total = await node(null, "aggregate", "total", "综合测评总分", 105, "sum", 0, 1, "思想品德 + 学业成绩 + 学术创新成果 + 学生工作");
+    await node(total, "aggregate", "moral", "思想品德", 5, "deduct", 0, 10);
+    await node(total, "aggregate", "academic", "学业成绩", 86, "formula", 0, 20);
+    const innovation = await node(total, "aggregate", "innovation", "学术创新成果", 7, "cap", 0, 30, "同一子类别取最高，不同子类别可累加");
+    const research = await node(innovation, "aggregate", "innovation.research", "科研成果", null, "sum", 0, 10);
+    await node(research, "aggregate", "innovation.research.project", "项目成果", null, "max", 0, 10);
+    const paper = await node(research, "aggregate", "innovation.research.paper", "论文成果", null, "max", 0, 20);
     const paperItem = await node(paper, "item", "innovation.research.paper.level", "论文成果等级认定", null, "sum", 1, 10, "按期刊/会议等级计分");
-    const competition = await node(innovation, "category", "innovation.competition", "竞赛获奖", null, "sum", 0, 20);
-    const creative = await node(competition, "subcategory", "innovation.competition.creative", "创意策划类", null, "max", 0, 20);
+    const competition = await node(innovation, "aggregate", "innovation.competition", "竞赛获奖", null, "sum", 0, 20);
+    const creative = await node(competition, "aggregate", "innovation.competition.creative", "创意策划类", null, "max", 0, 20);
     const challengeCup = await node(creative, "item", "innovation.competition.creative.challenge_cup", "挑战杯/互联网+竞赛", null, "sum", 1, 10);
-    await node(innovation, "category", "innovation.certification", "学科认证", null, "max", 0, 30);
+    await node(innovation, "aggregate", "innovation.certification", "学科认证", null, "max", 0, 30);
 
-    const work = await node(total, "module", "student_work", "学生工作", 7, "cap", 0, 40);
-    const position = await node(work, "category", "student_work.position", "岗位任职", 3, "max", 0, 10, "各岗位类别加分不累计，取最高");
+    const work = await node(total, "aggregate", "student_work", "学生工作", 7, "cap", 0, 40);
+    const position = await node(work, "aggregate", "student_work.position", "岗位任职", 3, "max", 0, 10, "各岗位类别加分不累计，取最高");
     const classPosition = await node(position, "item", "student_work.position.class", "班级与团支部职务", null, "formula", 1, 10);
-    const activity = await node(work, "category", "student_work.activity", "学生活动", 4, "cap", 0, 20);
-    const sports = await node(activity, "subcategory", "student_work.activity.sports", "文体比赛类", 2, "cap", 0, 10);
+    const activity = await node(work, "aggregate", "student_work.activity", "学生活动", 4, "cap", 0, 20);
+    const sports = await node(activity, "aggregate", "student_work.activity.sports", "文体比赛类", 2, "cap", 0, 10);
     const sportsItem = await node(sports, "item", "student_work.activity.sports.rank", "文体比赛获奖", null, "weight", 1, 10, "运动会项目可按A/B/C级权重修正");
-    const practice = await node(activity, "subcategory", "student_work.activity.practice", "实践活动", 1.5, "cap", 0, 20);
+    const practice = await node(activity, "aggregate", "student_work.activity.practice", "实践活动", 1.5, "cap", 0, 20);
     const practiceItem = await node(practice, "item", "student_work.activity.practice.social", "寒暑期社会实践", null, "level", 1, 10);
-    await node(activity, "subcategory", "student_work.activity.party_class", "党团班活动", 2, "cap", 0, 30);
-    await node(work, "category", "student_work.penalty", "违规处罚", null, "deduct", 0, 30);
+    await node(activity, "aggregate", "student_work.activity.party_class", "党团班活动", 2, "cap", 0, 30);
+    await node(work, "aggregate", "student_work.penalty", "违规处罚", null, "deduct", 0, 30);
 
     await conn.execute(
       `INSERT INTO rule_calculation_config (node_id, config_type, formula_code, config_json, rounding_rule)
@@ -474,6 +738,7 @@ async function seedDemo() {
 }
 
 async function handleApi(req, res) {
+  // 请求先交给各业务模块路由处理；所有模块都未处理时才返回 404。
   const { parts } = parseRoute(req);
   const method = req.method || "GET";
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
@@ -588,19 +853,27 @@ async function handleApi(req, res) {
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-versions" && parts[3] === "nodes") {
     const versionId = Number(parts[2]);
     const body = await readJson(req);
+    const parentId = normalizeParentId(body.parent_id ?? body.parentId);
+    const isApplyEntry = toBool(body.is_apply_entry ?? body.isApplyEntry);
+    const nodeType = await validateRuleNodeStructure({
+      versionId,
+      parentId,
+      nodeType: body.node_type || body.nodeType,
+      isApplyEntry
+    });
     const result = await query(
       `INSERT INTO rule_node
        (rule_set_version_id, parent_id, node_type, code, name, max_score, aggregation_type, is_apply_entry, sort_order, status, description)
        VALUES (:versionId, :parentId, :nodeType, :code, :name, :maxScore, :aggregationType, :isApplyEntry, :sortOrder, 'enabled', :description)`,
       {
         versionId,
-        parentId: body.parent_id || body.parentId || null,
-        nodeType: body.node_type || body.nodeType,
+        parentId,
+        nodeType,
         code: body.code,
         name: body.name,
         maxScore: toNullableDecimal(body.max_score ?? body.maxScore),
         aggregationType: body.aggregation_type || body.aggregationType || null,
-        isApplyEntry: toBool(body.is_apply_entry ?? body.isApplyEntry) ? 1 : 0,
+        isApplyEntry: isApplyEntry ? 1 : 0,
         sortOrder: Number(body.sort_order || body.sortOrder || 0),
         description: body.description || null
       }
@@ -611,6 +884,20 @@ async function handleApi(req, res) {
   if (method === "PUT" && parts[0] === "api" && parts[1] === "rule-nodes" && parts.length === 3) {
     const nodeId = Number(parts[2]);
     const body = await readJson(req);
+    const [existingNode] = await query(
+      `SELECT id, rule_set_version_id FROM rule_node WHERE id = :nodeId`,
+      { nodeId }
+    );
+    if (!existingNode) throw httpError(404, "规则节点不存在");
+    const parentId = normalizeParentId(body.parent_id ?? body.parentId);
+    const isApplyEntry = toBool(body.is_apply_entry ?? body.isApplyEntry);
+    const nodeType = await validateRuleNodeStructure({
+      versionId: existingNode.rule_set_version_id,
+      nodeId,
+      parentId,
+      nodeType: body.node_type || body.nodeType,
+      isApplyEntry
+    });
     await query(
       `UPDATE rule_node
        SET parent_id = :parentId,
@@ -626,13 +913,13 @@ async function handleApi(req, res) {
        WHERE id = :nodeId`,
       {
         nodeId,
-        parentId: body.parent_id || body.parentId || null,
-        nodeType: body.node_type || body.nodeType,
+        parentId,
+        nodeType,
         code: body.code,
         name: body.name,
         maxScore: toNullableDecimal(body.max_score ?? body.maxScore),
         aggregationType: body.aggregation_type || body.aggregationType || null,
-        isApplyEntry: toBool(body.is_apply_entry ?? body.isApplyEntry) ? 1 : 0,
+        isApplyEntry: isApplyEntry ? 1 : 0,
         sortOrder: Number(body.sort_order || body.sortOrder || 0),
         status: body.status || "enabled",
         description: body.description || null
@@ -643,8 +930,26 @@ async function handleApi(req, res) {
 
   if (method === "DELETE" && parts[0] === "api" && parts[1] === "rule-nodes" && parts.length === 3) {
     const nodeId = Number(parts[2]);
-    await query("DELETE FROM rule_node WHERE id = :nodeId", { nodeId });
-    return ok(res, { id: nodeId }, "规则节点已删除");
+    const data = await deleteRuleNode(nodeId, req);
+    data.auto_calculations = [];
+    for (const academicYearId of data.affected_academic_year_ids) {
+      const [approved] = await query(
+        `SELECT COUNT(*) AS count FROM application_record
+         WHERE academic_year_id = :academicYearId AND status = 'approved'`,
+        { academicYearId }
+      );
+      if (Number(approved.count) > 0) {
+        data.auto_calculations.push(
+          await runCalculation({
+            academicYearId,
+            batchType: "rule_change",
+            triggerReason: "rule_node_deleted",
+            createdBy: 1
+          })
+        );
+      }
+    }
+    return ok(res, data, "规则节点及其下级已删除");
   }
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-nodes" && parts[3] === "calculation-configs") {
@@ -785,7 +1090,12 @@ async function handleApi(req, res) {
   }
 
   if (method === "DELETE" && parts[0] === "api" && parts[1] === "academic-years" && parts.length === 3) {
-    const data = await deleteAcademicYear(Number(parts[2]), req);
+    const academicYearId = Number(parts[2]);
+    const force = url.searchParams.get("force") === "true";
+    const data = force
+      ? await forceDeleteAcademicYear(academicYearId, url.searchParams.get("confirmName"), req)
+      : await deleteAcademicYear(academicYearId, req);
+    if (force) return ok(res, data, "学年及其全部业务数据已彻底删除");
     return ok(res, data, data.deleted ? "学年已删除" : "学年已归档");
   }
 
@@ -801,6 +1111,8 @@ async function handleApi(req, res) {
 }
 
 async function serveStatic(req, res) {
+  // 上传材料与前端静态资源使用不同根目录；读取前校验解析后的路径，
+  // 防止通过路径穿越访问项目目录之外的文件。
   const { url } = parseRoute(req);
   let filePath = decodeURIComponent(url.pathname);
   if (filePath.startsWith("/uploads/")) {

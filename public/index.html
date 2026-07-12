@@ -86,9 +86,10 @@
 
           <section class="surface editor-surface">
             <div class="tabs">
-              <button class="tab active" data-tab="node">节点</button>
-              <button class="tab" data-tab="config">配置</button>
-              <button class="tab" data-tab="year">学年</button>
+              <button class="tab active" data-tab="rules">规则集与版本</button>
+              <button class="tab" data-tab="node">创建节点</button>
+              <button class="tab" data-tab="config">节点配置</button>
+              <button class="tab" data-tab="year">学年管理</button>
               <button class="tab" data-tab="apply">申报</button>
               <button class="tab" data-tab="audit">审核</button>
               <button class="tab" data-tab="calc">核算</button>
@@ -96,7 +97,26 @@
               <button class="tab" data-tab="system">系统</button>
             </div>
 
-            <div id="tab-node" class="tab-page active">
+            <div id="tab-rules" class="tab-page active">
+              <form id="ruleSetForm" class="compact-form">
+                <h3>新建规则集</h3>
+                <input name="name" placeholder="规则集名称" />
+                <textarea name="description" rows="2" placeholder="说明"></textarea>
+                <button type="submit">创建规则集</button>
+              </form>
+
+              <form id="versionForm" class="compact-form">
+                <h3>新建版本</h3>
+                <div class="row-3">
+                  <input name="versionNo" placeholder="v2026.09" />
+                  <input name="versionName" placeholder="版本名称" />
+                  <input name="changeNote" placeholder="变更说明" />
+                </div>
+                <button type="submit">创建版本</button>
+              </form>
+            </div>
+
+            <div id="tab-node" class="tab-page">
               <form id="nodeForm" class="form-grid">
                 <label>
                   父节点
@@ -105,11 +125,8 @@
                 <label>
                   节点类型
                   <select name="nodeType">
-                    <option value="module">模块</option>
-                    <option value="category">分类</option>
-                    <option value="subcategory">子分类</option>
+                    <option value="aggregate">汇总节点</option>
                     <option value="item">规则项</option>
-                    <option value="total">总分</option>
                   </select>
                 </label>
                 <label>
@@ -120,11 +137,11 @@
                   名称
                   <input name="name" required placeholder="文体比赛补充项" />
                 </label>
-                <label>
-                  上限分
+                <label id="aggregateMaxScoreField">
+                  汇总上限分
                   <input name="maxScore" type="number" step="0.001" placeholder="2" />
                 </label>
-                <label>
+                <label id="aggregateTypeField">
                   汇总方式
                   <select name="aggregationType">
                     <option value="">无</option>
@@ -141,18 +158,21 @@
                 </label>
                 <label class="check-line">
                   <input name="isApplyEntry" type="checkbox" />
-                  学生可申报
+                  作为学生申报入口（仅规则项）
                 </label>
                 <label class="wide">
                   说明
                   <textarea name="description" rows="3"></textarea>
                 </label>
-                <button class="primary wide" type="submit">新增规则节点</button>
+                <button class="primary wide" type="submit">创建节点</button>
               </form>
             </div>
 
             <div id="tab-config" class="tab-page">
               <div id="selectedNodeBox" class="selected-box">尚未选择节点</div>
+              <div class="button-row node-config-actions">
+                <button id="deleteNodeBtn" class="danger-btn" type="button">删除选中节点</button>
+              </div>
 
               <form id="calcForm" class="compact-form">
                 <h3>计分配置</h3>
@@ -246,23 +266,6 @@
             </div>
 
             <div id="tab-year" class="tab-page">
-              <form id="ruleSetForm" class="compact-form">
-                <h3>新建规则集</h3>
-                <input name="name" placeholder="规则集名称" />
-                <textarea name="description" rows="2" placeholder="说明"></textarea>
-                <button type="submit">创建规则集</button>
-              </form>
-
-              <form id="versionForm" class="compact-form">
-                <h3>新建版本</h3>
-                <div class="row-3">
-                  <input name="versionNo" placeholder="v2026.09" />
-                  <input name="versionName" placeholder="版本名称" />
-                  <input name="changeNote" placeholder="变更说明" />
-                </div>
-                <button type="submit">创建版本</button>
-              </form>
-
               <form id="yearForm" class="compact-form">
                 <h3>新建学年</h3>
                 <div class="row-3">
@@ -454,7 +457,7 @@
               <div id="system-users" class="system-page">
                 <div class="section-actions">
                   <input id="userKeyword" placeholder="用户名/姓名" />
-                  <select id="userRoleFilter"><option value="">全部角色</option><option value="student">学生</option><option value="class_committee">班委</option><option value="college_admin">学院管理员</option></select>
+                  <select id="userRoleFilter"><option value="">全部角色</option><option value="student">学生</option><option value="class_committee">班委</option><option value="college_admin">学院管理员</option><option value="super_admin">最高管理员</option></select>
                   <button id="loadUsersBtn">查询</button>
                   <button id="downloadUserTemplateBtn">模板下载</button>
                   <label class="file-like">批量导入<input id="userImportInput" type="file" accept=".xlsx" /></label>
@@ -467,7 +470,7 @@
                     <input name="password" placeholder="初始/重置密码" value="123456" />
                   </div>
                   <div class="row-3">
-                    <select name="role"><option value="student">学生</option><option value="class_committee">班委</option><option value="college_admin">学院管理员</option></select>
+                    <select name="role"><option value="student">学生</option><option value="class_committee">班委</option><option value="college_admin">学院管理员</option><option value="super_admin">最高管理员</option></select>
                     <select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
                     <input name="email" placeholder="邮箱" />
                   </div>

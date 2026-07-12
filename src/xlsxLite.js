@@ -1,5 +1,8 @@
 import zlib from "node:zlib";
 
+// 面向本项目简单表格导入导出的轻量 XLSX 实现，仅支持当前所需的 ZIP/XML 子集，
+// 不能作为通用 Excel 处理引擎。
+
 const crcTable = (() => {
   const table = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {

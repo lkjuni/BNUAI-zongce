@@ -4,6 +4,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, transaction } from "./db.js";
 
+// 学生申报流程：根据学年规则快照生成表单，保存草稿和证明材料，
+// 并在每次正式提交时固化不可变的申报版本。
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
@@ -119,6 +122,7 @@ function groupByNode(rows) {
 }
 
 async function fetchApplyEntries(academicYearId = null) {
+  // 当前学年快照确定规则版本，is_apply_entry 决定哪些具体规则项生成学生表单。
   const year = await fetchCurrentApplyYear(academicYearId);
   const nodes = await query(
     `SELECT *
@@ -207,6 +211,7 @@ async function fetchApplicationDetail(applicationId) {
 }
 
 async function loadNodeConfigForUpdate(conn, academicYearId, ruleNodeId) {
+  // 草稿只能关联当前学年快照中的规则项，防止客户端提交任意节点或跨学年节点。
   const [rows] = await conn.execute(
     `SELECT y.id AS academic_year_id, y.name AS academic_year_name, y.current_snapshot_id,
             y.apply_start_time AS year_apply_start_time, y.apply_end_time AS year_apply_end_time,
@@ -310,6 +315,7 @@ function validateFieldValues(formFields, fieldValues) {
 }
 
 async function validateDuplicate(conn, { academicYearId, studentId, ruleCode, excludeApplicationId = null }) {
+  // 重复申报校验使用跨版本稳定的规则编码，而不是仅在单个版本内有效的节点 ID。
   const [rows] = await conn.execute(
     `SELECT COUNT(*) AS count
      FROM application_record a
@@ -366,6 +372,7 @@ async function logApplicationOperation(conn, applicationId, operatorId, operatio
 }
 
 async function insertApplicationRevision(conn, applicationId, revisionNo, submittedBy, submitType) {
+  // 提交版本是不可变 JSON 快照，用于还原退回重提之前每一次正式提交的内容。
   const [fields] = await conn.execute(
     `SELECT field_key, field_value FROM application_field_value WHERE application_id = ? ORDER BY id`,
     [applicationId]
@@ -431,6 +438,7 @@ async function loadApplicationForUpdate(conn, applicationId) {
 }
 
 async function submitApplicationTx(conn, applicationId, studentId, operatorId) {
+  // 提交操作在同一事务中校验必需材料、推进状态并写入不可变申报版本。
   const application = await loadApplicationForUpdate(conn, applicationId);
   if (studentId && Number(application.student_id) !== Number(studentId)) {
     throw makeHttpError(403, "不能提交其他学生的申报记录");
@@ -561,6 +569,7 @@ async function submitApplication(applicationId, body) {
 }
 
 async function attachMaterial(applicationId, body) {
+  // 先写入文件再保存元数据；storage_key 使用相对路径，便于后续迁移到对象存储。
   const studentId = Number(body.student_id || body.studentId);
   const materialRequirementId = body.material_requirement_id || body.materialRequirementId
     ? Number(body.material_requirement_id || body.materialRequirementId)

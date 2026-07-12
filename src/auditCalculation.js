@@ -1,5 +1,8 @@
 import { query, transaction, jsonParam } from "./db.js";
 
+// 审核与核算放在同一模块，是因为最终审核通过正是自动核算的触发事件。
+// 所有结果按核算批次保存，保证可追溯和可复查。
+
 function parseJsonCell(value, fallback = null) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === "object") return value;
@@ -282,6 +285,7 @@ async function seedAuditCalculationDemo() {
 }
 
 async function applyAuditAction(applicationId, body) {
+  // 规则可要求班级和学院两级审核；只有最终审核通过才将申报设为 approved 并触发重算。
   const action = body.action;
   const auditorId = Number(body.auditor_id || body.auditorId || 1);
   const auditRole = body.audit_role || body.auditRole || "class_committee";
@@ -404,6 +408,7 @@ function scoreFromPositionFormula(config, fields) {
 }
 
 function calculateConfigScore(configRow, fields) {
+  // 计分公式通过配置类型和公式编码白名单执行，规则数据中不保存可任意执行的 JS 或 SQL。
   const config = parseJsonCell(configRow.config_json, {});
   if (configRow.config_type === "fixed") {
     return toNumber(config.score, 0);
@@ -415,6 +420,7 @@ function calculateConfigScore(configRow, fields) {
 }
 
 async function runCalculation(body) {
+  // 核算分两层：先计算每条审核通过申报的基础分，再沿规则树自底向上汇总到根节点总分。
   const year = body.academicYearId || body.academic_year_id
     ? (await query(
         `SELECT y.*, s.rule_set_version_id
@@ -479,6 +485,7 @@ async function runCalculation(body) {
       [year.id]
     );
 
+    // 第一阶段：为每条审核通过的申报生成一条可解释的基础得分结果。
     const itemScoresByStudent = new Map();
     for (const app of apps) {
       const currentNode = currentNodeByCode.get(app.original_rule_code);
@@ -524,6 +531,7 @@ async function runCalculation(body) {
       nodeScores.get(calculationNodeId).push(rawScore);
     }
 
+    // 第二阶段：从最深节点向根节点汇总子节点结果，应用取最高、封顶等规则后生成总分和排名。
     const totalRows = [];
     for (const [studentId, itemScores] of itemScoresByStudent.entries()) {
       const resultByNode = new Map();

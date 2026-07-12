@@ -1,5 +1,8 @@
 import { transaction } from "./db.js";
 
+// 根据学院综测细则附件初始化默认规则集。下方辅助函数用于保持大量规则数据
+// 的声明式表达，整个导入过程由同一事务保证完整成功或完整回滚。
+
 const defaultRuleSetName = "人工智能学院本科生综合测评默认规则集";
 
 async function seedDefaultRuleSet() {
@@ -81,13 +84,13 @@ async function seedDefaultRuleSet() {
       );
     }
 
-    const total = await node(null, "total", "total", "综合测评总分", 105, "sum", 0, 1, "默认规则集根节点");
-    await node(total, "module", "moral", "思想品德", 5, "manual", 0, 10, "思想品德模块，当前作为预留模块。");
-    await node(total, "module", "academic", "学业成绩", 86, "manual", 0, 20, "学业成绩模块，当前作为外部成绩导入预留模块。");
+    const total = await node(null, "aggregate", "total", "综合测评总分", 105, "sum", 0, 1, "默认规则集根节点");
+    await node(total, "aggregate", "moral", "思想品德", 5, "manual", 0, 10, "思想品德模块，当前作为预留模块。");
+    await node(total, "aggregate", "academic", "学业成绩", 86, "manual", 0, 20, "学业成绩模块，当前作为外部成绩导入预留模块。");
 
-    const innovation = await node(total, "module", "innovation", "学术创新成果", 7, "cap", 0, 30, "附件二。模块最高 7 分，内部按规则树汇总后封顶。");
-    const research = await node(innovation, "category", "innovation.research", "科研成果", null, "sum", 0, 10, "包含项目成果、论文成果、其他成果。");
-    const project = await node(research, "subcategory", "innovation.research.project", "项目成果", null, "max", 0, 10, "本科生科研训练与创新创业项目，按项目类型、角色、阶段/结论计分。");
+    const innovation = await node(total, "aggregate", "innovation", "学术创新成果", 7, "cap", 0, 30, "附件二。模块最高 7 分，内部按规则树汇总后封顶。");
+    const research = await node(innovation, "aggregate", "innovation.research", "科研成果", null, "sum", 0, 10, "包含项目成果、论文成果、其他成果。");
+    const project = await node(research, "aggregate", "innovation.research.project", "项目成果", null, "max", 0, 10, "本科生科研训练与创新创业项目，按项目类型、角色、阶段/结论计分。");
     const projectItem = await node(project, "item", "innovation.research.project.result", "项目成果认定", null, "level", 1, 10, "未成功结题或中期退出为扣分项。");
     await config(projectItem, "level", {
       levels: [
@@ -157,7 +160,7 @@ async function seedDefaultRuleSet() {
     await material(projectItem, "项目结题/中期/优秀证明", "以教务数据或项目证明为准。");
     await audit(projectItem, "class_committee", "核对项目级别、角色、成员排名、结题/中期/优秀状态。", true);
 
-    const paper = await node(research, "subcategory", "innovation.research.paper", "论文成果", null, "max", 0, 20, "共同第一作者按 1/N；最佳论文奖或 Spotlight 升一档。");
+    const paper = await node(research, "aggregate", "innovation.research.paper", "论文成果", null, "max", 0, 20, "共同第一作者按 1/N；最佳论文奖或 Spotlight 升一档。");
     const paperItem = await node(paper, "item", "innovation.research.paper.publication", "论文成果认定", null, "level", 1, 10);
     await config(paperItem, "level", {
       levels: [
@@ -177,7 +180,7 @@ async function seedDefaultRuleSet() {
     await material(paperItem, "论文发表/录用证明", "正式发表或录用证明、导师说明、目录分类证明。");
     await audit(paperItem, "college_admin", "核对论文目录、作者顺序、共同一作人数、奖励升级情况。", true);
 
-    const other = await node(research, "subcategory", "innovation.research.other", "其他成果", null, "max", 0, 30);
+    const other = await node(research, "aggregate", "innovation.research.other", "其他成果", null, "max", 0, 30);
     const patentItem = await node(other, "item", "innovation.research.other.patent", "国家发明专利授权", null, "fixed", 1, 10, "仅认定已授权发明专利，第一发明人或教师第一本人第二。");
     await config(patentItem, "fixed", { score: 1 });
     await textField(patentItem, "patent_name", "专利名称");
@@ -188,8 +191,8 @@ async function seedDefaultRuleSet() {
     await material(highLevelItem, "专家推荐或评议材料", "专家推荐、工作小组评议意见。");
     await audit(highLevelItem, "college_admin", "由工作小组评议后人工确认分值。", true);
 
-    const competition = await node(innovation, "category", "innovation.competition", "竞赛获奖", null, "sum", 0, 20);
-    const professional = await node(competition, "subcategory", "innovation.competition.professional", "专业竞赛类", null, "max", 0, 10);
+    const competition = await node(innovation, "aggregate", "innovation.competition", "竞赛获奖", null, "sum", 0, 20);
+    const professional = await node(competition, "aggregate", "innovation.competition.professional", "专业竞赛类", null, "max", 0, 10);
     const professionalItem = await node(professional, "item", "innovation.competition.professional.award", "专业竞赛获奖认定", null, "level", 1, 10);
     await config(professionalItem, "level", {
       levels: [
@@ -283,7 +286,7 @@ async function seedDefaultRuleSet() {
     await material(professionalItem, "获奖证书或官方证明", "需体现竞赛名称、奖项等级、本人身份。");
     await audit(professionalItem, "class_committee", "核对专业竞赛名称、级别、奖项和证明材料。", true);
 
-    const creative = await node(competition, "subcategory", "innovation.competition.creative", "创意策划类", null, "max", 0, 20, "负责人取括号外分数，成员按前50%/后50%取括号内分数；非主赛道系数0.8。");
+    const creative = await node(competition, "aggregate", "innovation.competition.creative", "创意策划类", null, "max", 0, 20, "负责人取括号外分数，成员按前50%/后50%取括号内分数；非主赛道系数0.8。");
     const creativeItem = await node(creative, "item", "innovation.competition.creative.award", "创意策划类竞赛获奖认定", null, "level", 1, 10);
     await config(creativeItem, "level", {
       levels: [
@@ -377,7 +380,7 @@ async function seedDefaultRuleSet() {
     await material(creativeItem, "获奖证书及成员排名证明", "成员排名以获奖证书为准。");
     await audit(creativeItem, "class_committee", "核对赛道、奖项、负责人/成员排名。", true);
 
-    const teacher = await node(competition, "subcategory", "innovation.competition.teacher", "教师素养类", null, "max", 0, 30);
+    const teacher = await node(competition, "aggregate", "innovation.competition.teacher", "教师素养类", null, "max", 0, 30);
     const teacherItem = await node(teacher, "item", "innovation.competition.teacher.award", "教师素养类成果认定", null, "level", 1, 10);
     await config(teacherItem, "level", {
       levels: [
@@ -408,7 +411,7 @@ async function seedDefaultRuleSet() {
     await material(teacherItem, "证书或获奖证明", "师范生限制等由审核人核对。");
     await audit(teacherItem, "class_committee", "核对成果类别、证书、师范生适用限制。");
 
-    const certification = await node(innovation, "category", "innovation.certification", "学科认证", null, "max", 0, 30);
+    const certification = await node(innovation, "aggregate", "innovation.certification", "学科认证", null, "max", 0, 30);
     const cspItem = await node(certification, "item", "innovation.certification.csp", "计算机软件能力认证 CSP", null, "level", 1, 10, "成绩当年认定，仅计算一次。");
     await config(cspItem, "level", {
       levels: [
@@ -422,8 +425,8 @@ async function seedDefaultRuleSet() {
     await material(cspItem, "CSP成绩证明", "需提供成绩证明。");
     await audit(cspItem, "class_committee", "核对成绩年份、分数和是否重复认定。");
 
-    const studentWork = await node(total, "module", "student_work", "学生工作", 7, "cap", 0, 40, "附件四。岗位任职上限3分，学生活动上限4分。");
-    const position = await node(studentWork, "category", "student_work.position", "岗位任职", 3, "max", 0, 10, "各岗位类别加分不累计，取最高。");
+    const studentWork = await node(total, "aggregate", "student_work", "学生工作", 7, "cap", 0, 40, "附件四。岗位任职上限3分，学生活动上限4分。");
+    const position = await node(studentWork, "aggregate", "student_work.position", "岗位任职", 3, "max", 0, 10, "各岗位类别加分不累计，取最高。");
     const positionItem = await node(position, "item", "student_work.position.role", "岗位任职认定", null, "formula", 1, 10);
     await config(positionItem, "formula", {
       formula: "base_score * evaluation_weight",
@@ -466,8 +469,8 @@ async function seedDefaultRuleSet() {
     await material(positionItem, "任职证明或评议结果", "需包含任职周期和评价权重。");
     await audit(positionItem, "class_committee", "核对是否满一年、权重来源、岗位类别是否取最高。");
 
-    const activity = await node(studentWork, "category", "student_work.activity", "学生活动", 4, "cap", 0, 20);
-    const sports = await node(activity, "subcategory", "student_work.activity.sports", "文体比赛类", 2, "cap", 0, 10);
+    const activity = await node(studentWork, "aggregate", "student_work.activity", "学生活动", 4, "cap", 0, 20);
+    const sports = await node(activity, "aggregate", "student_work.activity.sports", "文体比赛类", 2, "cap", 0, 10);
     const sportsItem = await node(sports, "item", "student_work.activity.sports.award", "文体比赛获奖认定", null, "weight", 1, 10);
     await config(sportsItem, "weight", {
       levels: [
@@ -489,7 +492,7 @@ async function seedDefaultRuleSet() {
     await material(sportsItem, "文体比赛证明材料", "需提供报名名单、比赛名次或活动证明。");
     await audit(sportsItem, "class_committee", "核对名单、名次、项目难度分级和是否弃赛。");
 
-    const collegeActivity = await node(activity, "subcategory", "student_work.activity.college_event", "参与学院大型活动", 0.5, "cap", 0, 20);
+    const collegeActivity = await node(activity, "aggregate", "student_work.activity.college_event", "参与学院大型活动", 0.5, "cap", 0, 20);
     const collegeActivityItem = await node(collegeActivity, "item", "student_work.activity.college_event.participation", "学院大型活动参与认定", null, "level", 1, 10);
     await config(collegeActivityItem, "level", {
       levels: [
@@ -501,7 +504,7 @@ async function seedDefaultRuleSet() {
     await material(collegeActivityItem, "学院大型活动证明", "需提供活动组织方证明。");
     await audit(collegeActivityItem, "class_committee", "核对活动级别、角色和证明材料。");
 
-    const practice = await node(activity, "subcategory", "student_work.activity.practice", "实践活动", 1.5, "cap", 0, 30);
+    const practice = await node(activity, "aggregate", "student_work.activity.practice", "实践活动", 1.5, "cap", 0, 30);
     const practiceItem = await node(practice, "item", "student_work.activity.practice.result", "实践活动认定", null, "level", 1, 10);
     await config(practiceItem, "level", {
       levels: [
@@ -536,7 +539,7 @@ async function seedDefaultRuleSet() {
     await material(practiceItem, "实践活动结项/奖励证明", "需体现评级、本人角色、学院立项或奖励情况。");
     await audit(practiceItem, "class_committee", "核对评级、角色、追加加分条件。");
 
-    const partyClass = await node(activity, "subcategory", "student_work.activity.party_class", "党团班活动", 2, "cap", 0, 40);
+    const partyClass = await node(activity, "aggregate", "student_work.activity.party_class", "党团班活动", 2, "cap", 0, 40);
     const partyClassItem = await node(partyClass, "item", "student_work.activity.party_class.record", "党团班活动认定", null, "level", 1, 10);
     await config(partyClassItem, "level", {
       levels: [

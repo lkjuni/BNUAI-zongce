@@ -4,4 +4,4 @@ tmp/
 tools/
 .env
 *.log
-
+uploads/applications/

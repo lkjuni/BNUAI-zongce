@@ -48,6 +48,7 @@ DROP TABLE IF EXISTS academic_year;
 
 SET FOREIGN_KEY_CHECKS = 1;
 
+-- 学年、可复用规则版本和不可变学年规则快照。
 CREATE TABLE academic_year (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   name VARCHAR(50) NOT NULL COMMENT '学年名称，如2025-2026学年度',
@@ -133,6 +134,7 @@ CREATE TABLE rule_operation_log (
   KEY idx_rule_log_operator (operator_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='规则相关操作日志';
 
+-- 学生基础数据、系统用户和跨模块操作日志。
 CREATE TABLE student_profile (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   student_no VARCHAR(50) NOT NULL,
@@ -189,11 +191,12 @@ CREATE TABLE system_operation_log (
   KEY idx_system_log_operator (operator_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='system operation log';
 
+-- 通用规则树，以及挂载在 aggregate/item 节点上的各类配置。
 CREATE TABLE rule_node (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   rule_set_version_id BIGINT NOT NULL,
   parent_id BIGINT NULL,
-  node_type VARCHAR(30) NOT NULL COMMENT 'total/module/category/subcategory/item',
+  node_type VARCHAR(30) NOT NULL COMMENT 'aggregate/item；汇总层级由parent_id决定',
   code VARCHAR(100) NOT NULL COMMENT '同一版本内唯一编码',
   name VARCHAR(150) NOT NULL,
   max_score DECIMAL(8,3) NULL COMMENT '节点上限分',
@@ -213,6 +216,8 @@ CREATE TABLE rule_node (
   UNIQUE KEY uk_rule_node_code (rule_set_version_id, code),
   KEY idx_rule_node_parent (parent_id),
   KEY idx_rule_node_apply (rule_set_version_id, is_apply_entry, status),
+  CONSTRAINT chk_rule_node_type CHECK (node_type IN ('aggregate', 'item')),
+  CONSTRAINT chk_rule_node_apply_entry CHECK (node_type = 'item' OR is_apply_entry = 0),
   CONSTRAINT fk_rule_node_version
     FOREIGN KEY (rule_set_version_id) REFERENCES rule_set_version(id)
     ON DELETE CASCADE ON UPDATE CASCADE,
@@ -306,6 +311,7 @@ CREATE TABLE group_distribution_rule (
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='团体成果分配规则';
 
+-- 学生申报、证明材料、提交版本和审核轨迹。
 CREATE TABLE application_record (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   academic_year_id BIGINT NOT NULL,
@@ -441,6 +447,7 @@ CREATE TABLE application_operation_log (
     ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='application operation log';
 
+-- 审核任务分配和批量审核支持。
 CREATE TABLE audit_task (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   academic_year_id BIGINT NOT NULL,
@@ -487,6 +494,7 @@ CREATE TABLE audit_batch (
     ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='batch audit operation';
 
+-- 受控公式目录，以及按核算批次保存的两阶段得分结果。
 CREATE TABLE formula_template (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   formula_code VARCHAR(100) NOT NULL UNIQUE,
@@ -681,6 +689,7 @@ CREATE TABLE score_change_record (
     ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='分数变化记录';
 
+-- 固化的公示结果和异议处理历史。
 CREATE TABLE publicity_batch (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   academic_year_id BIGINT NOT NULL,

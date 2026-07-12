@@ -277,6 +277,19 @@ button.primary:hover {
   background: #fff5f5;
 }
 
+.danger-solid {
+  margin-left: 8px;
+  background: #b42318;
+  border-color: #b42318;
+  color: #fff;
+}
+
+.danger-solid:hover {
+  background: #8f1d14;
+  border-color: #8f1d14;
+  color: #fff;
+}
+
 .list-item span,
 .plain-list span,
 .tag {
@@ -401,6 +414,7 @@ button.primary:hover {
   gap: 6px;
   padding: 10px;
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
 }
 
 .tab {
@@ -441,6 +455,10 @@ button.primary:hover {
 .compact-form h3 {
   font-size: 15px;
   margin-bottom: 10px;
+}
+
+.node-config-actions {
+  margin: 10px 0 14px;
 }
 
 label {

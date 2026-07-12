@@ -1,5 +1,8 @@
 import mysql from "mysql2/promise";
 
+// 所有业务模块共享连接池，避免每个接口都创建短生命周期的 MySQL 连接。
+// 连接配置优先读取进程环境变量，未配置时使用本地 Docker 验证环境的默认值。
+
 const config = {
   host: process.env.DB_HOST || "127.0.0.1",
   port: Number(process.env.DB_PORT || 3307),
@@ -20,6 +23,8 @@ export async function query(sql, params = {}) {
 }
 
 export async function transaction(work) {
+  // 跨多个申报表或成绩表的业务操作必须整体提交或整体回滚。
+  // 回调使用当前事务独占的数据库连接。
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
@@ -40,4 +45,3 @@ export function jsonParam(value) {
   }
   return typeof value === "string" ? value : JSON.stringify(value);
 }
-

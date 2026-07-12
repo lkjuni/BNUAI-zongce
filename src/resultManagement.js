@@ -2,6 +2,9 @@ import { query, transaction } from "./db.js";
 import { buildXlsx } from "./xlsxLite.js";
 import { logOperation } from "./systemManagement.js";
 
+// 负责结果查询、xlsx 导出和公示生命周期。公示会复制指定核算批次，
+// 避免后续重算导致已经发布的公示结果发生漂移。
+
 function makeError(status, message, details = undefined) {
   const error = new Error(message);
   error.status = status;
@@ -165,6 +168,8 @@ async function publicityStatus(url) {
 }
 
 async function startPublicity(body, ipAddress) {
+  // 将选定核算结果固化到 publicity_result；后续统计可以继续变化，
+  // 但已经发布的公示批次始终可以原样复现。
   const academicYearId = Number(body.academic_year_id || body.academicYearId);
   if (!academicYearId) throw makeError(400, "请选择学年");
   const batch = await requireBatch(academicYearId, body.batch_id || body.batchId);
