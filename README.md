@@ -73,12 +73,118 @@ BNUAI_zongce/
 
 ## 环境要求
 
-- Windows PowerShell 5.1 或更高版本
-- Docker Desktop
-- Node.js 20 或更高版本
-- MySQL 8.4 Docker 镜像，由启动脚本自动创建
+### 你需要安装的软件
 
-默认数据库配置：
+| 软件 | 用途 | 下载 |
+|------|------|------|
+| **Docker Desktop** | 运行 MySQL 数据库 | https://www.docker.com/products/docker-desktop |
+| **Node.js** 20+ | 运行后端服务 | https://nodejs.org（推荐 LTS 版本） |
+| **Git**（可选） | 克隆代码 | https://git-scm.com |
+
+> **不需要手动配置路径！** 所有脚本通过 `scripts/common.ps1` 自动查找 Node.js 和 Docker，支持常见安装位置（包括 VS Code 内置的 Codex 运行时、nvm、fnm 等）。
+
+### 数据库配置
+
+脚本会自动创建 MySQL Docker 容器，默认配置如下（无需手动修改）：
+
+```text
+容器名：bnuai-zongce-mysql
+端口映射：本机 3307 → 容器 3306
+数据库：bnuai_zongce
+应用用户：zongce / zongce123
+root 密码：root123
+```
+
+如需自定义，可在运行脚本前设置环境变量（参考 `.env.example`）。
+
+---
+
+## 给朋友的快速上手指南
+
+以下步骤从零开始，大约 **10 分钟** 即可跑起来。
+
+### 第一步：克隆代码
+
+```powershell
+git clone <仓库地址>
+cd BNUAI_zongce
+```
+
+如果你拿到的是压缩包，解压后进入该目录即可。
+
+### 第二步：安装依赖
+
+```powershell
+npm install
+# 或者
+pnpm install
+```
+
+### 第三步：启动 MySQL 数据库
+
+> **前提：Docker Desktop 必须正在运行**（任务栏有 Docker 图标且状态为 "Engine running"）。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-mysql.ps1
+```
+
+首次运行会自动下载 MySQL 镜像（约 500 MB），之后启动只需几秒。看到 `MySQL is ready on 127.0.0.1:3307` 即成功。
+
+### 第四步：初始化数据库表
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\init-db.ps1
+```
+
+看到 `Database schema initialized.` 即成功。
+
+> ⚠️ **注意**：此命令会清空并重建所有表，仅在首次安装时执行。
+
+### 第五步：启动应用
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-app.ps1
+```
+
+看到 `Rule config demo is running at http://0.0.0.0:5173` 即成功。
+
+### 第六步：打开浏览器
+
+- 本机访问：**http://localhost:5173**
+- 局域网内的朋友访问：**http://\<你的电脑IP\>:5173**（如 `http://192.168.1.100:5173`）
+
+### 第七步：初始化默认规则集
+
+进入页面后：
+1. 点击侧边栏「规则集与版本」
+2. 点击「初始化默认规则集」
+3. 系统会自动创建学年、规则树和示例申报数据
+
+现在就可以体验完整的申报→审核→核算→结果流程了！
+
+---
+
+## 环境要求（详细）
+
+- **操作系统**：Windows 10/11（PowerShell 5.1+）
+- **Docker Desktop**：用于运行 MySQL 8.4 容器
+- **Node.js**：20 或更高版本
+- 不需要手动安装 MySQL —— 启动脚本自动管理 Docker 容器
+
+### 路径自动检测
+
+所有 `.ps1` 脚本通过 `scripts/common.ps1` 自动查找 `node.exe` 和 `docker.exe`，无需手动配置环境变量。搜索顺序：
+
+1. 系统 PATH（`Get-Command`）
+2. 常见安装目录（`Program Files`、`AppData`）
+3. VS Code Codex 运行时（`~/.cache/codex-runtimes`）
+4. Node.js 版本管理器（nvm-windows、fnm）
+
+如果你使用的是非标准安装路径，只需确保 `node` 和 `docker` 命令可在终端中直接执行（即已加入 PATH）即可。
+
+### 自定义数据库配置
+
+默认配置适用于本地 Docker 环境：
 
 ```text
 host: 127.0.0.1
@@ -88,46 +194,9 @@ user: zongce
 password: zongce123
 ```
 
-可通过 `.env.example` 查看支持的环境变量。当前程序直接读取进程环境变量，不会自动加载 `.env` 文件。
+可通过环境变量覆盖（参考 `.env.example`），当前程序直接读取进程环境变量。
 
-## 快速启动
-
-### 1. 启动 MySQL
-
-先启动 Docker Desktop，然后执行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\start-mysql.ps1
-```
-
-脚本会创建或启动 `bnuai-zongce-mysql` 容器，并将容器 3306 端口映射到本机 3307。
-
-### 2. 初始化全新数据库
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\init-db.ps1
-```
-
-注意：`sql/schema.sql` 会删除并重新创建业务表。只有全新安装或明确需要清空测试数据时才能执行，已有业务数据时应使用迁移脚本。
-
-### 3. 启动应用
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\start-app.ps1
-```
-
-默认访问地址：
-
-- 本机：`http://localhost:5173`
-- 局域网：`http://<本机局域网IP>:5173`
-
-指定端口或监听地址：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\start-app.ps1 -Port 5174 -BindHost 0.0.0.0
-```
-
-如果已经安装 Node.js 和 pnpm，也可以执行 `pnpm start`。没有安装 pnpm 时直接使用 `scripts/start-app.ps1`。
+---
 
 ## 已有数据库迁移
 
@@ -172,6 +241,44 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-year-force-delete.ps1
 ## 权限说明
 
 当前版本是业务和数据库验证原型，尚未接入正式登录会话。彻底删除学年时，前端提交最高管理员用户 ID，后端根据 `system_user.role = 'super_admin'` 和用户状态再次校验。接入统一身份认证后，应从登录会话取得操作者身份，不能继续信任前端传入的用户 ID。
+
+## 常见问题
+
+### 脚本报错 "Cannot find node.exe"
+Node.js 未安装或未加入 PATH。请从 https://nodejs.org 下载安装，安装时勾选 "Add to PATH"。安装后重新打开终端再试。
+
+### 脚本报错 "Cannot find docker.exe"
+Docker Desktop 未安装或未运行。请从 https://www.docker.com/products/docker-desktop 下载安装并启动。确保任务栏 Docker 图标状态为 "Engine running"。
+
+### MySQL 容器启动失败
+检查 Docker Desktop 是否正在运行，以及 3307 端口是否被占用：
+```powershell
+docker ps -a
+netstat -ano | findstr 3307
+```
+
+### 应用启动后无法访问
+- 确认看到的输出是 `Rule config demo is running at http://0.0.0.0:5173`
+- 检查 Windows 防火墙是否允许 Node.js 入站连接
+- 如果本机可用但局域网不可用，检查是否在同一网络段
+
+### 数据库连接失败
+确认 MySQL 容器在运行：
+```powershell
+docker ps --filter "name=bnuai-zongce-mysql"
+```
+如果没有运行，重新执行 `scripts/start-mysql.ps1`。
+
+### 如何彻底重置
+```powershell
+# 1. 停止并删除容器（清空所有数据）
+docker rm -f bnuai-zongce-mysql
+
+# 2. 重新启动
+powershell -ExecutionPolicy Bypass -File scripts\start-mysql.ps1
+powershell -ExecutionPolicy Bypass -File scripts\init-db.ps1
+powershell -ExecutionPolicy Bypass -File scripts\start-app.ps1
+```
 
 ## 设计文档
 

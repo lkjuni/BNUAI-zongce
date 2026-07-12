@@ -1,9 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$node = "C:\Users\33267\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if (!(Test-Path -LiteralPath $node)) {
-  $node = "node"
-}
+. "$PSScriptRoot\common.ps1"
 
 $cwd = (Resolve-Path ".").Path
 $port = "5178"
@@ -13,7 +10,7 @@ $job = Start-Job -ScriptBlock {
   $env:PORT = $serverPort
   $env:HOST = "0.0.0.0"
   & $nodePath "src/server.js" 2>&1
-} -ArgumentList $node, $cwd, $port
+} -ArgumentList $NodeExe, $cwd, $port
 
 Start-Sleep -Seconds 3
 
@@ -127,7 +124,7 @@ if (!summary.resultCount) throw new Error('result query returned no rows');
 if (!summary.exportBytes) throw new Error('export file is empty');
 if (!summary.publicityEnded) throw new Error('publicity was not closed');
 console.log(JSON.stringify(summary, null, 2));
-'@ | & $node --input-type=module -
+'@ | & $NodeExe --input-type=module -
 } finally {
   Stop-Job $job -ErrorAction SilentlyContinue
   Receive-Job $job -ErrorAction SilentlyContinue | Select-Object -First 30

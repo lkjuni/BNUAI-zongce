@@ -1,9 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$node = "C:\Users\33267\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if (!(Test-Path -LiteralPath $node)) {
-  $node = "node"
-}
+. "$PSScriptRoot\common.ps1"
 
 @'
 const base = "http://127.0.0.1:5173";
@@ -129,4 +126,4 @@ try {
     await api(`/api/rule-sets/${ruleSetId}`, { method: "DELETE" });
   }
 }
-'@ | & $node --input-type=module -
+'@ | & $NodeExe --input-type=module -

@@ -1,9 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$node = "C:\Users\33267\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if (!(Test-Path -LiteralPath $node)) {
-  $node = "node"
-}
+. "$PSScriptRoot\common.ps1"
 
 $cwd = (Resolve-Path ".").Path
 $port = "5174"
@@ -12,7 +9,7 @@ $job = Start-Job -ScriptBlock {
   Set-Location $workDir
   $env:PORT = $serverPort
   & $nodePath "src/server.js" 2>&1
-} -ArgumentList $node, $cwd, $port
+} -ArgumentList $NodeExe, $cwd, $port
 
 Start-Sleep -Seconds 3
 
@@ -96,7 +93,7 @@ const summary = {
 };
 
 console.log(JSON.stringify(summary, null, 2));
-'@ | & $node --input-type=module -
+'@ | & $NodeExe --input-type=module -
 } finally {
   Stop-Job $job -ErrorAction SilentlyContinue
   Receive-Job $job -ErrorAction SilentlyContinue | Select-Object -First 20

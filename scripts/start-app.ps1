@@ -5,10 +5,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$nodeExe = "C:\Users\33267\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if (!(Test-Path -LiteralPath $nodeExe)) {
-  $nodeExe = "node"
-}
+. "$PSScriptRoot\common.ps1"
 
 $projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $projectRoot
@@ -19,4 +16,4 @@ Write-Output "LAN binding: http://${BindHost}:$Port"
 
 $env:PORT = "$Port"
 $env:BIND_HOST = "$BindHost"
-& $nodeExe "src/server.js"
+& $NodeExe "src/server.js"

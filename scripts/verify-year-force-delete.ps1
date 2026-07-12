@@ -1,9 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$node = "C:\Users\33267\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe"
-if (!(Test-Path -LiteralPath $node)) {
-  $node = "node"
-}
+. "$PSScriptRoot\common.ps1"
 
 @'
 import mysql from "mysql2/promise";
@@ -125,4 +122,4 @@ try {
   if (superAdminId) await db.execute("DELETE FROM system_user WHERE id = ?", [superAdminId]);
   await db.end();
 }
-'@ | & $node --input-type=module -
+'@ | & $NodeExe --input-type=module -
