@@ -542,7 +542,10 @@ async function runCalculation(body) {
         const inputs = [...ownScores, ...childResults.map((row) => row.effective)];
         let raw = inputs.reduce((sum, value) => sum + toNumber(value), 0);
         let effective = raw;
-        if (node.aggregation_type === "max") {
+        // max 和 level 节点均取直接输入的最大值：
+        // - max: 汇总节点，子节点可能是汇总项或申报项，取最高分
+        // - level: 叶子申报节点，多条申报时只计最高一条（每类成果取最优）
+        if (node.aggregation_type === "max" || node.aggregation_type === "level") {
           raw = inputs.length ? Math.max(...inputs.map(toNumber)) : 0;
           effective = raw;
         }
