@@ -285,7 +285,7 @@ async function seedAuditCalculationDemo() {
 }
 
 async function applyAuditAction(applicationId, body) {
-  // 规则可要求班级和学院两级审核；只有最终审核通过才将申报设为 approved 并触发重算。
+  // 任意一个有权限的审核角色通过，即完成最终审核并触发自动核算。
   const action = body.action;
   const auditorId = Number(body.auditor_id || body.auditorId || 1);
   const auditRole = body.audit_role || body.auditRole || "class_committee";
@@ -340,24 +340,6 @@ async function applyAuditAction(applicationId, body) {
       );
       await logApplicationOperation(conn, applicationId, auditorId, "reject", { comment });
       return { id: applicationId, academicYearId: app.academic_year_id, status: "rejected" };
-    }
-
-    const [requirements] = await conn.execute(
-      `SELECT need_second_audit
-       FROM audit_requirement
-       WHERE node_id = ?`,
-      [app.rule_node_id]
-    );
-    const needsSecondAudit = requirements.some((row) => row.need_second_audit) && auditRole !== "college_admin";
-    if (needsSecondAudit) {
-      await conn.execute(
-        `UPDATE application_record
-         SET status = 'submitted', audit_stage = 'college_review', current_auditor_role = 'college_admin'
-         WHERE id = ?`,
-        [applicationId]
-      );
-      await logApplicationOperation(conn, applicationId, auditorId, "approve", { comment, next_stage: "college_review" });
-      return { id: applicationId, academicYearId: app.academic_year_id, status: "submitted", audit_stage: "college_review" };
     }
 
     await conn.execute(

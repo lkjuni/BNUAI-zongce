@@ -122,7 +122,7 @@ async function seedDefaultRuleSet() {
       extraFields: [{ key: "project_name", label: "项目名称", type: "text", sortOrder: 2, required: true }],
       materialName: "项目结题/中期/优秀证明",
       auditInstruction: "核对项目级别、角色、成员排名和结项状态。",
-      secondAudit: true
+      secondAudit: false
     });
 
     const paperItem = await item(research, "innovation.research.paper", "年度最高论文成果", 20, "同一学年只申报计分最高的一篇论文，避免用规则项承担多条成果汇总。");
@@ -132,20 +132,20 @@ async function seedDefaultRuleSet() {
     await field(paperItem, "paper_title", "论文题目", "text", null, 2);
     await field(paperItem, "co_first_author_count", "共同第一作者人数 N", "number", null, 3, false, { min: 1, step: 1 });
     await proof(paperItem, "论文发表/录用证明", "正式发表或录用证明、作者顺序和目录分类证明。", 8);
-    await audit(paperItem, "college_admin", "核对论文目录、作者顺序、共同一作人数和奖励升级。", true);
+    await audit(paperItem, "college_admin", "核对论文目录、作者顺序、共同一作人数和奖励升级。", false);
 
     const otherResearch = await aggregate(research, "innovation.research.other", "其他成果", null, "max", 30, "多个其他成果只取最高分。");
     const patentItem = await item(otherResearch, "innovation.research.other.patent", "国家发明专利授权", 10);
     await config(patentItem, "fixed", { score: 1 });
     await field(patentItem, "patent_name", "专利名称", "text");
     await proof(patentItem, "专利授权书", "仅认定已授权发明专利及规定发明人顺序。");
-    await audit(patentItem, "college_admin", "核对专利类型、授权状态和发明人顺序。", true);
+    await audit(patentItem, "college_admin", "核对专利类型、授权状态和发明人顺序。", false);
     const highLevelItem = await item(otherResearch, "innovation.research.other.high_level", "其他高水平成果", 20);
     await config(highLevelItem, "formula", { field_key: "manual_score" }, "DIRECT_FIELD_SCORE");
     await field(highLevelItem, "achievement_name", "成果名称", "text");
     await field(highLevelItem, "manual_score", "工作小组认定分数", "number", null, 2, true, { min: 0, max: 7, step: 0.001 });
     await proof(highLevelItem, "专家推荐或评议材料", "专家推荐和工作小组评议意见。", 8);
-    await audit(highLevelItem, "college_admin", "由工作小组评议并确认分值。", true);
+    await audit(highLevelItem, "college_admin", "由工作小组评议并确认分值。", false);
 
     const competition = await aggregate(innovation, "innovation.competition", "竞赛获奖", null, "sum", 20);
     const professional = await aggregate(competition, "innovation.competition.professional", "专业竞赛类", null, "sum", 10, "不同竞赛可以同时发生，拆为独立规则项后求和。");
@@ -171,7 +171,7 @@ async function seedDefaultRuleSet() {
         fieldLabel: "奖项",
         materialName: "获奖证书或官方证明",
         auditInstruction: `核对${name}奖项、本人身份和证明材料。`,
-        secondAudit: true
+        secondAudit: false
       });
     }
 
@@ -196,7 +196,7 @@ async function seedDefaultRuleSet() {
         extraFields: trackFactor ? [{ key: "track_type", label: "赛道", type: "select", options: ["主赛道", "非主赛道"], sortOrder: 2, required: true }] : [],
         materialName: "获奖证书及成员排名证明",
         auditInstruction: `核对${name}奖项、赛道和团队角色。`,
-        secondAudit: true
+        secondAudit: false
       });
     }
 

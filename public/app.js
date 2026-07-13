@@ -1607,7 +1607,7 @@ async function wireEvents() {
 
   async function auditSelected(action, comment) {
     if (!state.selectedAuditApplication) throw new Error("请先选择申报记录");
-    await api(`/api/audit/applications/${state.selectedAuditApplication.id}/actions`, {
+    const result = await api(`/api/audit/applications/${state.selectedAuditApplication.id}/actions`, {
       method: "POST",
       body: JSON.stringify({
         action,
@@ -1619,6 +1619,10 @@ async function wireEvents() {
     const status = $("#auditStatusFilter").value;
     await loadAuditApplications();
     if (status !== "all") state.selectedAuditApplication = null;
+    if (result.status === "approved") {
+      toast(`审核动作已完成：申报已通过${result.auto_calculation ? "，已自动触发核算" : ""}`);
+      return;
+    }
     toast("审核动作已完成");
   }
 
