@@ -407,6 +407,27 @@ function scoreFromPositionFormula(config, fields) {
   return toNumber(base.score) * weight;
 }
 
+function scoreFromPaperFormula(config, fields) {
+  const baseScore = scoreFromLevel(config, fields);
+  if (baseScore === null) return null;
+  const authorCount = Math.max(1, toNumber(fields.get("co_first_author_count"), 1));
+  return baseScore / authorCount;
+}
+
+function scoreFromPracticeFormula(config, fields) {
+  const baseScore = scoreFromLevel(config, fields);
+  if (baseScore === null) return null;
+  const collegeBonus = fields.get("college_project") === "是" ? 0.1 : 0;
+  const awardBonus = fields.get("extra_award") === "国家级奖励" ? 0.5 : fields.get("extra_award") === "北京市级奖励" ? 0.2 : 0;
+  return baseScore + collegeBonus + awardBonus;
+}
+
+function scoreFromQuantityFormula(config, fields) {
+  const quantity = Math.max(0, toNumber(fields.get(config.field_key), 0));
+  const score = quantity * toNumber(config.step_score, 0);
+  return config.max_score === undefined ? score : Math.min(score, toNumber(config.max_score));
+}
+
 function calculateConfigScore(configRow, fields) {
   // 计分公式通过配置类型和公式编码白名单执行，规则数据中不保存可任意执行的 JS 或 SQL。
   const config = parseJsonCell(configRow.config_json, {});
@@ -415,6 +436,18 @@ function calculateConfigScore(configRow, fields) {
   }
   if (configRow.formula_code === "POSITION_SCORE_BY_WEIGHT") {
     return scoreFromPositionFormula(config, fields);
+  }
+  if (configRow.formula_code === "PAPER_SCORE_BY_AUTHORS") {
+    return scoreFromPaperFormula(config, fields);
+  }
+  if (configRow.formula_code === "PRACTICE_SCORE_WITH_BONUS") {
+    return scoreFromPracticeFormula(config, fields);
+  }
+  if (configRow.formula_code === "DIRECT_FIELD_SCORE") {
+    return toNumber(fields.get(config.field_key), 0);
+  }
+  if (configRow.formula_code === "QUANTITY_STEP_CAP") {
+    return scoreFromQuantityFormula(config, fields);
   }
   return scoreFromLevel(config, fields);
 }

@@ -533,7 +533,11 @@ VALUES
   ('BASE_SCORE_TIMES_WEIGHT', 'base score times weight', 'Score equals base score multiplied by configured weight.', '{"base_score":"number","weight":"number"}', '{"score":"number"}'),
   ('POSITION_SCORE_BY_WEIGHT', 'position score by evaluation weight', 'Position score equals base position score multiplied by evaluation weight.', '{"base_score":"number","evaluation_weight":"number"}', '{"score":"number"}'),
   ('LEVEL_SCORE', 'level score', 'Score is selected from a configured level list.', '{"level":"string"}', '{"score":"number"}'),
-  ('FIXED_SCORE', 'fixed score', 'Score is configured as a fixed value.', '{"score":"number"}', '{"score":"number"}');
+  ('FIXED_SCORE', 'fixed score', 'Score is configured as a fixed value.', '{"score":"number"}', '{"score":"number"}'),
+  ('PAPER_SCORE_BY_AUTHORS', 'paper score by authors', 'Paper level score divided by co-first-author count.', '{"paper_level":"string","co_first_author_count":"number"}', '{"score":"number"}'),
+  ('PRACTICE_SCORE_WITH_BONUS', 'practice score with bonus', 'Practice base score plus college-project and award bonuses.', '{"practice_level":"string","college_project":"string","extra_award":"string"}', '{"score":"number"}'),
+  ('DIRECT_FIELD_SCORE', 'direct field score', 'Use a reviewed numeric form field as score.', '{"field_value":"number"}', '{"score":"number"}'),
+  ('QUANTITY_STEP_CAP', 'quantity step cap', 'Quantity multiplied by step score and limited by a cap.', '{"quantity":"number"}', '{"score":"number"}');
 
 CREATE TABLE score_calculation_batch (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,

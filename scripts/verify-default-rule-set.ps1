@@ -45,19 +45,22 @@ const byCode = new Map(nodes.map((node) => [node.code, node]));
 
 const requiredCodes = [
   'innovation',
-  'innovation.research.project.result',
-  'innovation.research.paper.publication',
+  'innovation.research.project',
+  'innovation.research.paper',
   'innovation.research.other.patent',
-  'innovation.competition.professional.award',
-  'innovation.competition.creative.award',
-  'innovation.competition.teacher.award',
+  'innovation.competition.professional.icpc',
+  'innovation.competition.professional.ccpc',
+  'innovation.competition.creative.challenge_cup',
+  'innovation.competition.teacher.national_future_teacher',
   'innovation.certification.csp',
   'student_work',
-  'student_work.position.role',
-  'student_work.activity.sports.award',
-  'student_work.activity.college_event.participation',
-  'student_work.activity.practice.result',
-  'student_work.activity.party_class.record'
+  'student_work.position',
+  'student_work.activity.sports.campus_competition',
+  'student_work.activity.sports.meeting_event',
+  'student_work.activity.college_event',
+  'student_work.activity.practice.social',
+  'student_work.activity.party_class.dormitory',
+  'student_work.activity.party_class.academic_lecture'
 ];
 
 const missing = requiredCodes.filter((code) => !byCode.has(code));
@@ -68,12 +71,20 @@ const formFieldCount = applyEntries.reduce((sum, node) => sum + (node.form_field
 const materialCount = applyEntries.reduce((sum, node) => sum + (node.material_requirements || []).length, 0);
 const auditCount = applyEntries.reduce((sum, node) => sum + (node.audit_requirements || []).length, 0);
 const calculationCount = nodes.reduce((sum, node) => sum + (node.calculation_configs || []).length, 0);
+const ruleItems = nodes.filter((node) => node.node_type === 'item');
+const aggregateNodes = nodes.filter((node) => node.node_type === 'aggregate');
+const invalidItems = ruleItems.filter((node) =>
+  node.max_score !== null || node.aggregation_type !== null || Number(node.allow_repeat) !== 0 || !Number(node.is_apply_entry) || (node.children || []).length
+);
+const redundantAggregates = aggregateNodes.filter((node) => (node.children || []).length === 1);
 
 if (applyEntries.length < 10) throw new Error(`Expected at least 10 apply entries, got ${applyEntries.length}`);
 if (formFieldCount < 15) throw new Error(`Expected enough form fields, got ${formFieldCount}`);
 if (materialCount < 10) throw new Error(`Expected enough material requirements, got ${materialCount}`);
 if (auditCount < 10) throw new Error(`Expected enough audit requirements, got ${auditCount}`);
 if (calculationCount < 10) throw new Error(`Expected enough calculation configs, got ${calculationCount}`);
+if (invalidItems.length) throw new Error(`Invalid canonical item nodes: ${invalidItems.map((node) => node.code).join(', ')}`);
+if (redundantAggregates.length) throw new Error(`Aggregate nodes with one child: ${redundantAggregates.map((node) => node.code).join(', ')}`);
 
 const yearDeletion = await api(`/api/academic-years/${seed.academicYearId}`, { method: 'DELETE' });
 if (!yearDeletion.deleted) throw new Error(`Seed academic year should be deleted before business use: ${JSON.stringify(yearDeletion)}`);
@@ -92,10 +103,14 @@ console.log(JSON.stringify({
   materialCount,
   auditCount,
   calculationConfigCount: calculationCount,
+  ruleItemCount: ruleItems.length,
+  aggregateCount: aggregateNodes.length,
+  redundantAggregateCount: redundantAggregates.length,
   yearDeletion,
   deletion
 }, null, 2));
 '@ | & $NodeExe --input-type=module -
+if ($LASTEXITCODE -ne 0) { throw "Default rule set verification failed." }
 } finally {
   Stop-Job $job -ErrorAction SilentlyContinue
   Receive-Job $job -ErrorAction SilentlyContinue | Select-Object -First 30

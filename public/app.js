@@ -577,6 +577,12 @@ function renderParentSelect() {
 function renderNodeDetails() {
   const box = $("#selectedNodeBox");
   const deleteButton = $("#deleteNodeBtn");
+  const itemOnlyFormIds = ["#calcForm", "#fieldForm", "#materialForm", "#auditForm", "#groupRuleForm"];
+  const itemSelected = state.selectedNode?.node_type === "item";
+  itemOnlyFormIds.forEach((selector) => {
+    const form = $(selector);
+    if (form) form.hidden = Boolean(state.selectedNode) && !itemSelected;
+  });
   if (deleteButton) deleteButton.disabled = !state.selectedNode;
   if (!state.selectedNode) {
     box.textContent = "尚未选择节点";
@@ -917,7 +923,27 @@ function renderAudit() {
     .map((row) => `<div class="detail-line">${row.field_key}: ${JSON.stringify(row.field_value)}</div>`)
     .join("");
   const attachmentHtml = (app.attachments || [])
-    .map((row) => `<div class="detail-line">${row.file_name} · ${row.review_result || "pending"}<br>${row.file_url}</div>`)
+    .map((row) => {
+      const fileUrl = String(row.file_url || "");
+      const canOpen = fileUrl.startsWith("/uploads/");
+      const mimeType = String(row.mime_type || "").toLowerCase();
+      let preview = `<div class="material-unavailable">该测试材料没有可打开的实体文件</div>`;
+      if (canOpen && mimeType === "application/pdf") {
+        preview = `<iframe class="audit-material-frame" src="${escapeHtml(fileUrl)}" title="${escapeHtml(row.file_name)}"></iframe>`;
+      } else if (canOpen && mimeType.startsWith("image/")) {
+        preview = `<img class="audit-material-image" src="${escapeHtml(fileUrl)}" alt="${escapeHtml(row.file_name)}" />`;
+      } else if (canOpen) {
+        preview = `<a class="material-open-link" href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener">打开材料文件</a>`;
+      }
+      return `
+        <article class="audit-material">
+          <div class="audit-material-head">
+            <div><strong>${escapeHtml(row.file_name)}</strong><span>${escapeHtml(row.mime_type || "未知类型")} · ${escapeHtml(row.review_result || "pending")}</span></div>
+            ${canOpen ? `<a href="${escapeHtml(fileUrl)}" target="_blank" rel="noopener">新窗口打开</a>` : ""}
+          </div>
+          ${preview}
+        </article>`;
+    })
     .join("");
   const auditHtml = (app.audits || [])
     .map((row) => `<div class="detail-line">${row.audit_role} · ${row.audit_result}<br>${row.audit_comment || ""}</div>`)
@@ -926,7 +952,7 @@ function renderAudit() {
     <strong>${app.title || app.rule_name}</strong>
     <div class="node-meta">${app.rule_code} · 学生 ${app.student_id} · ${app.status}</div>
     <div class="detail-group"><strong>字段</strong>${fieldHtml || '<div class="detail-line">无</div>'}</div>
-    <div class="detail-group"><strong>材料</strong>${attachmentHtml || '<div class="detail-line">无</div>'}</div>
+    <div class="detail-group"><strong>学生上传材料</strong>${attachmentHtml || '<div class="detail-line">无</div>'}</div>
     <div class="detail-group"><strong>审核记录</strong>${auditHtml || '<div class="detail-line">暂无</div>'}</div>
   `;
 }
@@ -1333,7 +1359,7 @@ async function wireEvents() {
         name: data.name,
         maxScore: isAggregate ? data.maxScore || null : null,
         aggregationType: isAggregate ? data.aggregationType || null : null,
-        isApplyEntry: Boolean(data.isApplyEntry),
+        isApplyEntry: data.nodeType === "item",
         sortOrder: Number(data.sortOrder || 0),
         description: data.description
       })
@@ -1353,8 +1379,8 @@ async function wireEvents() {
   const syncNodeTypeControls = () => {
     // 字段 max_score 和 aggregation_type 只描述汇总节点；规则项分值在“节点配置”页单独维护。
     const isItem = nodeTypeSelect.value === "item";
-    applyEntryCheckbox.disabled = !isItem;
-    if (!isItem) applyEntryCheckbox.checked = false;
+    applyEntryCheckbox.checked = isItem;
+    applyEntryCheckbox.disabled = true;
     aggregateMaxScoreField.hidden = isItem;
     aggregateTypeField.hidden = isItem;
     maxScoreInput.disabled = isItem;

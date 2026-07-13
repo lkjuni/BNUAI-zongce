@@ -8,6 +8,7 @@
 
 - 规则由“规则集 → 规则版本 → 规则树”表达。
 - 规则树节点只分为 `aggregate`（汇总节点）和 `item`（规则项）。模块、分类和子分类由父子关系自然表达。
+- 汇总节点只配置汇总方式和上限；规则项只配置表单、材料、审核和计分，每名学生每学年每规则项最多一条申报。
 - 学年绑定规则快照，申报、审核和核算都保留对应的学年与快照信息。
 - 一条 `application_record` 是申报和审核的最小颗粒度。
 - 审核最终通过后自动核算；规则快照变化且已有通过申报时自动重算。
@@ -45,6 +46,8 @@ BNUAI_zongce/
 │  ├─ 003_system_result_management.sql
 │  │                                  # 结果与系统管理迁移
 │  ├─ 004_auth_role_score_import.sql  # 登录会话和角色统一上传迁移
+│  ├─ 005_unique_rule_item_application.sql
+│  │                                  # 规则项申报唯一键迁移
 │  └─ migrate-rule-node-aggregate.sql # 旧规则层级合并为 aggregate/item
 ├─ scripts/                          # Windows PowerShell 运维与验证脚本
 │  ├─ start-mysql.ps1                # 创建或启动 MySQL Docker 容器
@@ -53,6 +56,7 @@ BNUAI_zongce/
 │  ├─ start-app.ps1                  # 启动 Node 服务并开放局域网访问
 │  ├─ verify-rule-config.ps1         # 规则配置与快照绑定验证
 │  ├─ verify-rule-node-model.ps1     # aggregate/item 与节点删除约束验证
+│  ├─ verify-rule-item-constraint.mjs # 规则项唯一申报与规范树验证
 │  ├─ verify-default-rule-set.ps1    # 默认规则集完整性验证
 │  ├─ verify-application-submission.ps1
 │  │                                  # 申报、材料和提交版本验证
@@ -219,6 +223,7 @@ password: zongce123
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 002_audit_calculation_enhancements.sql
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 003_system_result_management.sql
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 004_auth_role_score_import.sql
+powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 005_unique_rule_item_application.sql
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile migrate-rule-node-aggregate.sql
 ```
 
