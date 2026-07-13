@@ -9,6 +9,9 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS appeal_process_record;
 DROP TABLE IF EXISTS appeal_record;
+DROP TABLE IF EXISTS score_import_row;
+DROP TABLE IF EXISTS score_import_batch;
+DROP TABLE IF EXISTS auth_session;
 DROP TABLE IF EXISTS publicity_result;
 DROP TABLE IF EXISTS publicity_batch;
 DROP TABLE IF EXISTS calculation_warning;
@@ -191,6 +194,22 @@ CREATE TABLE system_operation_log (
   KEY idx_system_log_operator (operator_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='system operation log';
 
+CREATE TABLE auth_session (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  revoked_at DATETIME NULL,
+  ip_address VARCHAR(64) NULL,
+  user_agent VARCHAR(255) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_auth_session_token (token_hash),
+  KEY idx_auth_session_user (user_id, expires_at),
+  CONSTRAINT fk_auth_session_user
+    FOREIGN KEY (user_id) REFERENCES system_user(id)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='登录会话';
+
 -- 通用规则树，以及挂载在 aggregate/item 节点上的各类配置。
 CREATE TABLE rule_node (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -202,7 +221,7 @@ CREATE TABLE rule_node (
   max_score DECIMAL(8,3) NULL COMMENT '节点上限分',
   aggregation_type VARCHAR(30) NULL COMMENT 'sum/max/cap/formula/deduct/manual',
   is_apply_entry TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否作为学生申报入口',
-  allow_repeat TINYINT(1) NOT NULL DEFAULT 1 COMMENT 'whether repeated applications are allowed',
+  allow_repeat TINYINT(1) NOT NULL DEFAULT 0 COMMENT '规则项固定不可重复；字段仅为兼容旧结构保留',
   duplicate_check_type VARCHAR(50) NULL COMMENT 'duplicate check type',
   duplicate_check_config_json JSON NULL COMMENT 'duplicate check config',
   apply_start_time DATETIME NULL COMMENT 'node-level apply start time',
@@ -318,6 +337,7 @@ CREATE TABLE application_record (
   snapshot_id BIGINT NOT NULL,
   student_id BIGINT NOT NULL COMMENT '学生ID，引用外部学生表',
   rule_node_id BIGINT NOT NULL COMMENT '对应可申报规则节点',
+  rule_item_code VARCHAR(100) NOT NULL COMMENT '跨规则版本稳定的规则项编码，用于保证每学年只申报一次',
   source_type VARCHAR(30) NOT NULL DEFAULT 'student_apply' COMMENT 'student_apply/admin_import/system_import',
   title VARCHAR(200) NULL COMMENT '申报标题或摘要',
   status VARCHAR(30) NOT NULL DEFAULT 'draft' COMMENT 'draft/submitted/returned/approved/rejected/withdrawn',
@@ -337,6 +357,7 @@ CREATE TABLE application_record (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_app_student_year (student_id, academic_year_id),
+  UNIQUE KEY uk_app_year_student_rule_item (academic_year_id, student_id, rule_item_code),
   KEY idx_app_rule_status (rule_node_id, status),
   KEY idx_app_snapshot (snapshot_id),
   CONSTRAINT fk_app_year
@@ -743,6 +764,50 @@ CREATE TABLE appeal_record (
     FOREIGN KEY (related_application_id) REFERENCES application_record(id)
     ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='异议和复查申请';
+
+CREATE TABLE score_import_batch (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  academic_year_id BIGINT NOT NULL,
+  snapshot_id BIGINT NOT NULL,
+  rule_node_id BIGINT NOT NULL,
+  uploader_user_id BIGINT NOT NULL,
+  uploader_role VARCHAR(50) NOT NULL,
+  upload_scope VARCHAR(30) NOT NULL COMMENT 'committee/college',
+  file_name VARCHAR(255) NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'processing' COMMENT 'processing/completed/failed',
+  total_rows INT NOT NULL DEFAULT 0,
+  success_rows INT NOT NULL DEFAULT 0,
+  failed_rows INT NOT NULL DEFAULT 0,
+  summary_json JSON NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at DATETIME NULL,
+  KEY idx_score_import_year_scope (academic_year_id, upload_scope, created_at),
+  KEY idx_score_import_uploader (uploader_user_id, created_at),
+  CONSTRAINT fk_score_import_year FOREIGN KEY (academic_year_id) REFERENCES academic_year(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_score_import_snapshot FOREIGN KEY (snapshot_id) REFERENCES academic_year_rule_snapshot(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_score_import_node FOREIGN KEY (rule_node_id) REFERENCES rule_node(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+  CONSTRAINT fk_score_import_user FOREIGN KEY (uploader_user_id) REFERENCES system_user(id) ON DELETE RESTRICT ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='学委和学院统一加分上传批次';
+
+CREATE TABLE score_import_row (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  batch_id BIGINT NOT NULL,
+  row_no INT NOT NULL,
+  student_no VARCHAR(50) NULL,
+  student_id BIGINT NULL,
+  title VARCHAR(200) NULL,
+  imported_score DECIMAL(8,3) NULL,
+  description TEXT NULL,
+  status VARCHAR(30) NOT NULL COMMENT 'succeeded/failed',
+  error_message VARCHAR(500) NULL,
+  application_id BIGINT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_score_import_row_batch (batch_id, row_no),
+  KEY idx_score_import_row_student (student_id),
+  CONSTRAINT fk_score_import_row_batch FOREIGN KEY (batch_id) REFERENCES score_import_batch(id) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT fk_score_import_row_student FOREIGN KEY (student_id) REFERENCES student_profile(id) ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT fk_score_import_row_application FOREIGN KEY (application_id) REFERENCES application_record(id) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci COMMENT='统一加分上传逐行处理结果';
 
 CREATE TABLE appeal_process_record (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,

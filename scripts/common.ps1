@@ -16,7 +16,7 @@ function Find-NodeExe {
     if ($_common_nodeExe) { return $_common_nodeExe }
 
     # 1) 通过 Get-Command 搜索 PATH
-    $cmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    $cmd = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) {
         $_common_nodeExe = $cmd.Source
         return $_common_nodeExe
@@ -59,7 +59,7 @@ function Find-DockerExe {
     #>
     if ($_common_dockerExe) { return $_common_dockerExe }
 
-    $cmd = Get-Command docker -CommandType Application -ErrorAction SilentlyContinue
+    $cmd = Get-Command docker -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) {
         $_common_dockerExe = $cmd.Source
         return $_common_dockerExe
@@ -67,7 +67,8 @@ function Find-DockerExe {
 
     $candidates = @(
         "$env:ProgramFiles\Docker\Docker\resources\bin\docker.exe",
-        "${env:ProgramFiles(x86)}\Docker\Docker\resources\bin\docker.exe"
+        "${env:ProgramFiles(x86)}\Docker\Docker\resources\bin\docker.exe",
+        "$env:LOCALAPPDATA\Programs\DockerDesktop\resources\bin\docker.exe"
     )
     foreach ($p in $candidates) {
         if (Test-Path -LiteralPath $p) {

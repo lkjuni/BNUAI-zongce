@@ -8,6 +8,8 @@ import { handleApplicationSubmissionApi } from "./applicationSubmission.js";
 import { handleResultManagementApi } from "./resultManagement.js";
 import { handleSystemManagementApi, logOperation } from "./systemManagement.js";
 import { seedDefaultRuleSet } from "./defaultRuleSet.js";
+import { authenticateRequest, ensureBootstrapAccounts, handleAuthApi } from "./auth.js";
+import { handleScoreImportApi } from "./scoreImport.js";
 
 // 应用入口：负责 HTTP 路由、规则/学年生命周期和静态文件等跨模块能力。
 // 申报、审核核算、结果和系统管理等具体业务分别放在独立模块中。
@@ -153,8 +155,15 @@ function clientIp(req) {
 }
 
 async function requireSuperAdmin(conn, req) {
-  // 当前原型尚未接入登录会话，因此根据操作者 ID 查询 system_user，
-  // 不直接信任浏览器传入的角色字符串。
+  // 新前端优先使用登录会话；X-Operator-Id 仅为旧验证脚本保留。
+  if (req.authUser) {
+    if (req.authUser.status !== "active" || req.authUser.role !== "super_admin") {
+      throw httpError(403, "只有状态正常的最高管理员可以彻底删除学年");
+    }
+    return req.authUser;
+  }
+  // 旧验证脚本没有会话令牌时，根据操作者 ID 查询 system_user；
+  // 即使走兼容分支，也不直接信任调用方传入的角色字符串。
   const operatorId = Number(req.headers["x-operator-id"]);
   if (!Number.isInteger(operatorId) || operatorId <= 0) {
     throw httpError(403, "彻底删除学年需要提供最高管理员用户 ID");
@@ -743,11 +752,19 @@ async function handleApi(req, res) {
   const method = req.method || "GET";
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
+  await authenticateRequest(req);
+
   if (method === "GET" && parts.join("/") === "api/health") {
     const rows = await query("SELECT 1 AS ok");
     const [tableCount] = await query("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE()");
     return ok(res, { database: rows[0].ok === 1, table_count: tableCount.count });
   }
+
+  const handledByAuth = await handleAuthApi(req, res, { parts, method, url, ok, fail, readJson });
+  if (handledByAuth !== false) return;
+
+  const handledByScoreImport = await handleScoreImportApi(req, res, { parts, method, url, ok, fail, readJson });
+  if (handledByScoreImport !== false) return;
 
   const handledByAuditCalculation = await handleAuditCalculationApi(req, res, { parts, method, url, ok, fail, readJson });
   if (handledByAuditCalculation !== false) return;
@@ -1180,6 +1197,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, host, async () => {
   try {
+    await ensureBootstrapAccounts();
     const [tableCount] = await query("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE()");
     console.log(`Rule config demo is running at http://${host}:${port}`);
     console.log(`Local access: http://localhost:${port}`);

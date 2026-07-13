@@ -6,15 +6,41 @@
     <title>规则配置验证</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
-  <body>
+  <body class="auth-pending">
+    <section id="loginScreen" class="login-screen" aria-label="登录">
+      <div class="login-brand">
+        <span class="global-icon">S</span>
+        <div>
+          <strong>综合测评管理系统</strong>
+          <span>人工智能学院</span>
+        </div>
+      </div>
+      <form id="loginForm" class="login-panel">
+        <div class="login-heading">
+          <p>统一身份认证</p>
+          <h1>登录工作台</h1>
+          <span>请选择与你账号一致的角色入口</span>
+        </div>
+        <div class="role-switch" role="radiogroup" aria-label="登录角色">
+          <label><input type="radio" name="role" value="student" checked /><span>学生</span></label>
+          <label><input type="radio" name="role" value="class_committee" /><span>学委</span></label>
+          <label><input type="radio" name="role" value="college_admin" /><span>学院管理员</span></label>
+        </div>
+        <label class="login-field">账号<input name="username" autocomplete="username" value="student001" required /></label>
+        <label class="login-field">密码<input name="password" type="password" autocomplete="current-password" value="123456" required /></label>
+        <button class="primary login-submit" type="submit">登录</button>
+        <p class="demo-hint">演示账号：student001、committee001、admin001，初始密码均为 123456</p>
+      </form>
+    </section>
     <header class="global-header">
       <div class="global-title">
         <span class="global-icon">S</span>
         <span>综测自动算分系统</span>
       </div>
       <div class="global-user">
-        <span>学院管理员</span>
-        <strong>规则与成绩管理</strong>
+        <span id="currentRoleLabel">未登录</span>
+        <strong id="currentUserName">-</strong>
+        <button id="logoutBtn" class="header-icon-btn" title="退出登录" aria-label="退出登录">退出</button>
       </div>
     </header>
     <div class="app-shell">
@@ -92,6 +118,7 @@
               <button class="tab" data-tab="year">学年管理</button>
               <button class="tab" data-tab="apply">申报</button>
               <button class="tab" data-tab="audit">审核</button>
+              <button class="tab" data-tab="import">统一上传</button>
               <button class="tab" data-tab="calc">核算</button>
               <button class="tab" data-tab="result">结果</button>
               <button class="tab" data-tab="system">系统</button>
@@ -354,6 +381,31 @@
               </div>
             </div>
 
+            <div id="tab-import" class="tab-page">
+              <div class="section-actions">
+                <select id="importYearSelect" aria-label="上传学年"></select>
+                <select id="importRuleNodeSelect" aria-label="目标规则项"></select>
+                <button id="downloadImportTemplateBtn">下载模板</button>
+                <label class="file-like">选择 xlsx<input id="scoreImportInput" type="file" accept=".xlsx" /></label>
+                <button id="uploadScoresBtn" class="primary">开始上传</button>
+              </div>
+              <div class="two-column">
+                <div>
+                  <h3 id="importTitle">统一加分上传</h3>
+                  <div class="selected-box upload-note">
+                    <strong>上传机制</strong>
+                    <p>每行数据会生成一条可追溯的已批准申报，随后自动触发一次核算。学委只能上传本行政班学生，学院管理员可上传全院学生。</p>
+                  </div>
+                  <div id="importResult" class="selected-box">尚未上传文件</div>
+                </div>
+                <div>
+                  <h3>上传记录</h3>
+                  <button id="loadImportHistoryBtn">刷新记录</button>
+                  <div id="importHistoryList" class="plain-list"></div>
+                </div>
+              </div>
+            </div>
+
             <div id="tab-calc" class="tab-page">
               <div class="section-actions">
                 <button id="runCalcBtn" class="primary">手动重算</button>
@@ -474,6 +526,7 @@
                     <select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
                     <input name="email" placeholder="邮箱" />
                   </div>
+                  <input name="relatedStudentId" type="number" placeholder="关联学生 ID（学生和学委账号用于限定本人/本班）" />
                   <button class="primary" type="submit">保存用户</button>
                   <button id="resetUserPasswordBtn" type="button">重置密码</button>
                 </form>

@@ -315,15 +315,13 @@ function validateFieldValues(formFields, fieldValues) {
 }
 
 async function validateDuplicate(conn, { academicYearId, studentId, ruleCode, excludeApplicationId = null }) {
-  // 重复申报校验使用跨版本稳定的规则编码，而不是仅在单个版本内有效的节点 ID。
+  // 规则项在业务上固定为每人每学年一条。这里先给出友好错误，数据库唯一键负责并发兜底。
   const [rows] = await conn.execute(
     `SELECT COUNT(*) AS count
      FROM application_record a
-     JOIN rule_node n ON n.id = a.rule_node_id
      WHERE a.academic_year_id = ?
        AND a.student_id = ?
-       AND n.code = ?
-       AND a.status IN ('draft', 'submitted', 'returned', 'approved')
+       AND a.rule_item_code = ?
        AND (? IS NULL OR a.id <> ?)`,
     [academicYearId, studentId, ruleCode, excludeApplicationId, excludeApplicationId]
   );
@@ -495,30 +493,32 @@ async function createApplication(body) {
   const title = body.title || "未命名申报";
   const fieldValues = body.field_values || body.fieldValues || {};
   const members = body.members || [];
-  const created = await transaction(async (conn) => {
-    const config = await loadNodeConfigForUpdate(conn, academicYearId, ruleNodeId);
-    validateApplyWindow(config.year, config.node, Boolean(body.enforceApplyWindow));
-    validateFieldValues(config.formFields, fieldValues);
-    if (!config.node.allow_repeat) {
-      await validateDuplicate(conn, {
-        academicYearId,
-        studentId,
-        ruleCode: config.node.code
-      });
-    }
+  let created;
+  try {
+    created = await transaction(async (conn) => {
+      const config = await loadNodeConfigForUpdate(conn, academicYearId, ruleNodeId);
+      validateApplyWindow(config.year, config.node, Boolean(body.enforceApplyWindow));
+      validateFieldValues(config.formFields, fieldValues);
+      await validateDuplicate(conn, { academicYearId, studentId, ruleCode: config.node.code });
 
-    const [result] = await conn.execute(
-      `INSERT INTO application_record
-       (academic_year_id, snapshot_id, student_id, rule_node_id, source_type, title, status, created_by)
-       VALUES (?, ?, ?, ?, 'student_apply', ?, 'draft', ?)`,
-      [academicYearId, config.year.current_snapshot_id, studentId, ruleNodeId, title, studentId]
-    );
-    const applicationId = result.insertId;
-    await writeFieldValues(conn, applicationId, fieldValues);
-    await writeMembers(conn, applicationId, members);
-    await logApplicationOperation(conn, applicationId, studentId, "create", { title });
-    return { id: applicationId };
-  });
+      const [result] = await conn.execute(
+        `INSERT INTO application_record
+         (academic_year_id, snapshot_id, student_id, rule_node_id, rule_item_code, source_type, title, status, created_by)
+         VALUES (?, ?, ?, ?, ?, 'student_apply', ?, 'draft', ?)`,
+        [academicYearId, config.year.current_snapshot_id, studentId, ruleNodeId, config.node.code, title, studentId]
+      );
+      const applicationId = result.insertId;
+      await writeFieldValues(conn, applicationId, fieldValues);
+      await writeMembers(conn, applicationId, members);
+      await logApplicationOperation(conn, applicationId, studentId, "create", { title });
+      return { id: applicationId };
+    });
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      throw makeHttpError(409, "每名学生每学年只能为同一规则项创建一条申报，请修改已有记录");
+    }
+    throw error;
+  }
 
   return fetchApplicationDetail(created.id);
 }
@@ -538,14 +538,12 @@ async function updateApplication(applicationId, body) {
     const config = await loadNodeConfigForUpdate(conn, application.academic_year_id, application.rule_node_id);
     validateApplyWindow(config.year, config.node, Boolean(body.enforceApplyWindow));
     validateFieldValues(config.formFields, fieldValues);
-    if (!config.node.allow_repeat) {
-      await validateDuplicate(conn, {
-        academicYearId: application.academic_year_id,
-        studentId: application.student_id,
-        ruleCode: config.node.code,
-        excludeApplicationId: application.id
-      });
-    }
+    await validateDuplicate(conn, {
+      academicYearId: application.academic_year_id,
+      studentId: application.student_id,
+      ruleCode: config.node.code,
+      excludeApplicationId: application.id
+    });
     await conn.execute(
       `UPDATE application_record
        SET title = ?

@@ -126,10 +126,10 @@ async function logApplicationOperation(conn, applicationId, operatorId, operatio
 async function createDemoApplication(conn, { year, node, studentId, title, fields, members = [] }) {
   const [appResult] = await conn.execute(
     `INSERT INTO application_record
-     (academic_year_id, snapshot_id, student_id, rule_node_id, source_type, title, status,
+     (academic_year_id, snapshot_id, student_id, rule_node_id, rule_item_code, source_type, title, status,
       current_revision_no, audit_stage, current_auditor_role, submitted_at, created_by)
-     VALUES (?, ?, ?, ?, 'student_apply', ?, 'submitted', 1, 'class_review', 'class_committee', NOW(), ?)`,
-    [year.id, year.current_snapshot_id, studentId, node.id, title, studentId]
+     VALUES (?, ?, ?, ?, ?, 'student_apply', ?, 'submitted', 1, 'class_review', 'class_committee', NOW(), ?)`,
+    [year.id, year.current_snapshot_id, studentId, node.id, node.code, title, studentId]
   );
   const applicationId = appResult.insertId;
 
@@ -504,10 +504,20 @@ async function runCalculation(body) {
       );
       const fields = await getFieldMap(app.id, conn);
       let rawScore = null;
-      const detail = { fields: Object.fromEntries(fields), configs: configs.map((row) => row.config_type) };
-      for (const config of configs) {
-        const score = calculateConfigScore(config, fields);
-        if (score !== null && score !== undefined) rawScore = rawScore === null ? score : Math.max(rawScore, score);
+      const trustedImport = ["admin_import", "system_import"].includes(app.source_type) && fields.has("import_score");
+      const detail = {
+        fields: Object.fromEntries(fields),
+        configs: configs.map((row) => row.config_type),
+        score_source: trustedImport ? "trusted_role_import" : "rule_calculation_config"
+      };
+      if (trustedImport) {
+        // 学委或学院统一上传已在受权限保护的接口中完成认定，导入分数作为规则项基础分参与后续统一汇总。
+        rawScore = toNumber(fields.get("import_score"), 0);
+      } else {
+        for (const config of configs) {
+          const score = calculateConfigScore(config, fields);
+          if (score !== null && score !== undefined) rawScore = rawScore === null ? score : Math.max(rawScore, score);
+        }
       }
       if (rawScore === null) {
         rawScore = 0;
@@ -522,8 +532,17 @@ async function runCalculation(body) {
       await conn.execute(
         `INSERT INTO score_item_result
          (batch_id, application_id, student_id, rule_node_id, score_source_type, raw_score, effective_score, calculation_detail_json)
-         VALUES (?, ?, ?, ?, 'application', ?, ?, ?)`,
-        [batchId, app.id, app.student_id, calculationNodeId, rawScore, rawScore, JSON.stringify({ ...detail, original_rule_code: app.original_rule_code })]
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          batchId,
+          app.id,
+          app.student_id,
+          calculationNodeId,
+          trustedImport ? "import" : "application",
+          rawScore,
+          rawScore,
+          JSON.stringify({ ...detail, original_rule_code: app.original_rule_code })
+        ]
       );
       if (!itemScoresByStudent.has(app.student_id)) itemScoresByStudent.set(app.student_id, new Map());
       const nodeScores = itemScoresByStudent.get(app.student_id);

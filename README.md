@@ -1,6 +1,6 @@
 # 综合测评自动算分系统
 
-本项目是面向学院本科生综合测评业务的可运行原型，覆盖规则集与学年管理、学生申报与材料提交、审核、自动核算、结果统计与公示，以及学生和用户管理。
+本项目是面向学院本科生综合测评业务的可运行原型，覆盖角色登录、规则集与学年管理、学生申报与材料提交、审核、学委/学院统一上传、自动核算、结果统计与公示，以及学生和用户管理。
 
 系统当前采用原生 Node.js HTTP 服务、MySQL 8.4 和原生 HTML/CSS/JavaScript。前后端由同一个 Node 进程提供，适合验证数据库模型和完整业务链路。
 
@@ -11,6 +11,7 @@
 - 学年绑定规则快照，申报、审核和核算都保留对应的学年与快照信息。
 - 一条 `application_record` 是申报和审核的最小颗粒度。
 - 审核最终通过后自动核算；规则快照变化且已有通过申报时自动重算。
+- 学委或学院统一上传会生成受信的已批准申报，再自动核算，不直接修改最终总分。
 - 核算先得到每条申报的基础分，再沿规则树执行求和、取最高和封顶等汇总规则。
 - 有业务数据的学年默认归档；只有有效的 `super_admin` 经过二次确认后才能彻底删除。
 
@@ -34,6 +35,8 @@ BNUAI_zongce/
 │  ├─ auditCalculation.js            # 审核动作、自动触发和分层核算
 │  ├─ resultManagement.js            # 统计、导出、公示和公示结果
 │  ├─ systemManagement.js            # 学生、用户、批量导入和操作日志
+│  ├─ auth.js                        # 登录会话、角色身份和演示账号初始化
+│  ├─ scoreImport.js                 # 学委/学院统一上传与自动核算接入
 │  └─ xlsxLite.js                    # 项目内置的轻量 xlsx 读写实现
 ├─ sql/                              # 数据库结构与历史迁移
 │  ├─ schema.sql                     # 全量建表脚本；全新初始化使用
@@ -41,6 +44,7 @@ BNUAI_zongce/
 │  │                                  # 申报、审核和核算增强迁移
 │  ├─ 003_system_result_management.sql
 │  │                                  # 结果与系统管理迁移
+│  ├─ 004_auth_role_score_import.sql  # 登录会话和角色统一上传迁移
 │  └─ migrate-rule-node-aggregate.sql # 旧规则层级合并为 aggregate/item
 ├─ scripts/                          # Windows PowerShell 运维与验证脚本
 │  ├─ start-mysql.ps1                # 创建或启动 MySQL Docker 容器
@@ -155,7 +159,16 @@ powershell -ExecutionPolicy Bypass -File scripts\start-app.ps1
 
 ### 第七步：初始化默认规则集
 
-进入页面后：
+使用以下演示账号登录，初始密码均为 `123456`：
+
+| 角色 | 账号 |
+|---|---|
+| 学生 | `student001` |
+| 学委 | `committee001` |
+| 学院管理员 | `admin001` |
+| 最高管理员 | `rootadmin`（从学院管理员入口登录） |
+
+管理员登录后：
 1. 点击侧边栏「规则集与版本」
 2. 点击「初始化默认规则集」
 3. 系统会自动创建学年、规则树和示例申报数据
@@ -205,6 +218,7 @@ password: zongce123
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 002_audit_calculation_enhancements.sql
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 003_system_result_management.sql
+powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile 004_auth_role_score_import.sql
 powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile migrate-rule-node-aggregate.sql
 ```
 
@@ -220,6 +234,7 @@ powershell -ExecutionPolicy Bypass -File scripts\migrate-db.ps1 -MigrationFile m
 | 学年管理 | 创建学年、绑定规则快照、归档或由最高管理员彻底删除 |
 | 申报 | 动态生成申报表单、保存草稿、上传材料和提交审核 |
 | 审核 | 查询审核队列、通过、退回或驳回，最终通过后自动核算 |
+| 统一上传 | 学委上传本行政班、学院管理员上传全院 xlsx；逐行留痕并自动核算 |
 | 核算 | 查看核算批次、学生总分和节点级得分明细 |
 | 结果 | 按年级/专业/行政班统计、导出、公示和结束公示 |
 | 系统 | 学生管理、用户管理、xlsx 导入、模板下载和操作日志 |
@@ -240,7 +255,7 @@ powershell -ExecutionPolicy Bypass -File scripts\verify-year-force-delete.ps1
 
 ## 权限说明
 
-当前版本是业务和数据库验证原型，尚未接入正式登录会话。彻底删除学年时，前端提交最高管理员用户 ID，后端根据 `system_user.role = 'super_admin'` 和用户状态再次校验。接入统一身份认证后，应从登录会话取得操作者身份，不能继续信任前端传入的用户 ID。
+当前版本已实现数据库登录会话和四类角色工作台。统一上传及彻底删除学年从会话取得操作者身份并在后端校验角色；`X-Operator-Id` 只为旧验证脚本保留，不应在新前端中使用。正式部署时仍应将本地账号登录替换为学校统一身份认证，并启用 HTTPS、密码强度策略和会话定期清理。
 
 ## 常见问题
 

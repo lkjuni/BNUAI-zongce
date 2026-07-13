@@ -1,5 +1,7 @@
 // 使用单一前端状态保存当前选择，确保用户在规则、申报、审核、核算和结果页切换时状态一致。
 const state = {
+  authToken: localStorage.getItem("zongce_auth_token") || "",
+  currentUser: null,
   ruleSets: [],
   versions: [],
   years: [],
@@ -29,14 +31,20 @@ const state = {
   users: [],
   selectedUser: null,
   operationLogs: [],
-  systemTab: "students"
+  systemTab: "students",
+  importEntries: [],
+  importHistory: []
 };
 
 const $ = (selector) => document.querySelector(selector);
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...(state.authToken ? { Authorization: `Bearer ${state.authToken}` } : {}),
+      ...(options.headers || {})
+    },
     ...options
   });
   const body = await res.json();
@@ -104,6 +112,57 @@ function statusLabel(status) {
     rejected: "已驳回",
     withdrawn: "已撤回"
   }[status] || status || "-";
+}
+
+function roleLabel(role) {
+  return {
+    student: "学生",
+    class_committee: "学委",
+    college_admin: "学院管理员",
+    super_admin: "最高管理员"
+  }[role] || role || "未登录";
+}
+
+function allowedTabs(role) {
+  if (role === "student") return ["apply", "result"];
+  if (role === "class_committee") return ["audit", "import", "result"];
+  return ["rules", "node", "config", "year", "apply", "audit", "import", "calc", "result", "system"];
+}
+
+function applyRoleWorkspace(user) {
+  state.currentUser = user;
+  const tabs = allowedTabs(user.role);
+  document.body.classList.remove("auth-pending");
+  document.body.classList.add("auth-ready");
+  document.body.classList.toggle("role-basic", ["student", "class_committee"].includes(user.role));
+  $("#currentRoleLabel").textContent = roleLabel(user.role);
+  $("#currentUserName").textContent = user.displayName || user.username;
+  $("#seedAuditBtn").hidden = user.role === "class_committee";
+  $("#startClassPublicityBtn").hidden = user.role !== "class_committee";
+  $("#startCollegePublicityBtn").hidden = !["college_admin", "super_admin"].includes(user.role);
+  $("#endPublicityBtn").hidden = user.role === "student";
+  $("#importTitle").textContent = user.role === "class_committee" ? "学委统一上传" : "学院统一上传";
+  if (["student", "class_committee"].includes(user.role)) {
+    $("#currentTitle").textContent = user.role === "student" ? "学生综合测评" : "学委工作台";
+    $("#currentMeta").textContent = user.className ? `${user.grade || ""} ${user.major || ""} ${user.className}`.trim() : "综合测评业务工作台";
+  }
+  document.querySelectorAll(".tab").forEach((button) => {
+    button.classList.toggle("role-hidden", !tabs.includes(button.dataset.tab));
+  });
+  if (user.role === "student" && user.relatedStudentId) {
+    state.applyStudentId = String(user.relatedStudentId);
+    $("#applyStudentId").value = String(user.relatedStudentId);
+    $("#applyStudentId").readOnly = true;
+  }
+  const firstTab = tabs.includes(state.activeTab) ? state.activeTab : tabs[0];
+  switchTab(firstTab);
+}
+
+function clearSession() {
+  state.authToken = "";
+  state.currentUser = null;
+  localStorage.removeItem("zongce_auth_token");
+  document.body.className = "auth-pending";
 }
 
 function downloadBase64File(payload) {
@@ -193,6 +252,39 @@ async function loadTree() {
 async function loadYears() {
   state.years = await api("/api/academic-years");
   renderYears();
+}
+
+async function loadImportWorkspace() {
+  const yearSelect = $("#importYearSelect");
+  const selectedYearId = Number(yearSelect?.value || state.years.find((year) => year.current_snapshot_id)?.id || state.years[0]?.id || 0);
+  if (yearSelect) {
+    yearSelect.innerHTML = state.years
+      .map((year) => `<option value="${year.id}" ${Number(year.id) === selectedYearId ? "selected" : ""}>${escapeHtml(year.name)}</option>`)
+      .join("");
+  }
+  state.importEntries = selectedYearId ? await api(`/api/imports/entries?academicYearId=${selectedYearId}`) : [];
+  const nodeSelect = $("#importRuleNodeSelect");
+  if (nodeSelect) {
+    nodeSelect.innerHTML = state.importEntries.length
+      ? state.importEntries.map((node) => `<option value="${node.id}">${escapeHtml(node.name)} (${escapeHtml(node.code)})</option>`).join("")
+      : `<option value="">当前学年没有可用规则项</option>`;
+  }
+  await loadImportHistory();
+}
+
+async function loadImportHistory() {
+  if (!state.currentUser || !["class_committee", "college_admin", "super_admin"].includes(state.currentUser.role)) return;
+  const scope = state.currentUser.role === "class_committee" ? "committee" : "college";
+  state.importHistory = await api(`/api/imports/history?scope=${scope}`);
+  const list = $("#importHistoryList");
+  if (!list) return;
+  list.innerHTML = state.importHistory.length
+    ? state.importHistory
+        .map(
+          (row) => `<div><strong>${escapeHtml(row.file_name)}</strong><br><span>${escapeHtml(row.academic_year_name)} · ${escapeHtml(row.rule_name)} · 成功 ${row.success_rows} / 失败 ${row.failed_rows}</span></div>`
+        )
+        .join("")
+    : `<div><span>暂无上传记录</span></div>`;
 }
 
 function selectedApplyYearId() {
@@ -395,7 +487,7 @@ function renderRuleSets() {
     };
     const del = document.createElement("button");
     del.className = "danger-btn";
-    del.textContent = "删";
+    del.textContent = "删除";
     del.title = "删除或归档规则集";
     del.onclick = async () => {
       if (!confirm(`确认删除/归档规则集：${item.name}？`)) return;
@@ -516,6 +608,13 @@ function renderMetrics() {
 }
 
 function renderTitle() {
+  if (state.currentUser && ["student", "class_committee"].includes(state.currentUser.role)) {
+    $("#currentTitle").textContent = state.currentUser.role === "student" ? "学生综合测评" : "学委工作台";
+    $("#currentMeta").textContent = state.currentUser.className
+      ? `${state.currentUser.grade || ""} ${state.currentUser.major || ""} ${state.currentUser.className}`.trim()
+      : "综合测评业务工作台";
+    return;
+  }
   const version = state.versions.find((item) => item.id === state.selectedVersionId);
   const ruleSet = state.ruleSets.find((item) => item.id === state.selectedRuleSetId);
   $("#currentTitle").textContent = version ? `${ruleSet?.name || "规则集"} · ${version.version_no}` : "未选择规则版本";
@@ -970,6 +1069,7 @@ function fillUserForm(user) {
   form.elements.role.value = user?.role || "student";
   form.elements.status.value = user?.status || "active";
   form.elements.email.value = user?.email || "";
+  form.elements.relatedStudentId.value = user?.related_student_id || "";
 }
 
 function renderSystem() {
@@ -1057,6 +1157,7 @@ function switchTab(tab) {
   document.querySelectorAll(".tab-page").forEach((page) => page.classList.toggle("active", page.id === `tab-${tab}`));
   if (tab === "apply") loadApplyWorkspace().catch((error) => toast(error.message));
   if (tab === "audit") loadAuditApplications().catch((error) => toast(error.message));
+  if (tab === "import") loadImportWorkspace().catch((error) => toast(error.message));
   if (tab === "calc") loadCalcBatches().catch((error) => toast(error.message));
   if (tab === "result") loadResultWorkspace().catch((error) => toast(error.message));
   if (tab === "system") {
@@ -1484,7 +1585,8 @@ async function wireEvents() {
       method: "POST",
       body: JSON.stringify({
         action,
-        auditRole: action === "approve" ? "college_admin" : "class_committee",
+        auditRole: state.currentUser?.role === "class_committee" ? "class_committee" : "college_admin",
+        auditorId: state.currentUser?.id || 1,
         comment
       })
     });
@@ -1604,7 +1706,8 @@ async function wireResultAndSystemEvents() {
       password: data.password,
       role: data.role,
       status: data.status,
-      email: data.email
+      email: data.email,
+      relatedStudentId: data.relatedStudentId || null
     };
     const saved = data.id
       ? await api(`/api/admin/users/${data.id}`, { method: "PUT", body: JSON.stringify(payload) })
@@ -1642,9 +1745,88 @@ async function refresh() {
   await loadYears();
   if (state.activeTab === "apply") await loadApplyWorkspace();
   if (state.activeTab === "audit") await loadAuditApplications();
+  if (state.activeTab === "import") await loadImportWorkspace();
   if (state.activeTab === "calc") await loadCalcBatches();
   if (state.activeTab === "result") await loadResultWorkspace();
   if (state.activeTab === "system") await Promise.all([loadStudents(), loadUsers(), loadOperationLogs()]);
+}
+
+async function wireAuthAndImportEvents() {
+  const roleAccounts = {
+    student: "student001",
+    class_committee: "committee001",
+    college_admin: "admin001"
+  };
+  document.querySelectorAll("#loginForm input[name='role']").forEach((input) => {
+    input.onchange = () => {
+      $("#loginForm").elements.username.value = roleAccounts[input.value];
+    };
+  });
+
+  $("#loginForm").onsubmit = async (event) => {
+    event.preventDefault();
+    try {
+      const data = formData(event.target);
+      const session = await api("/api/auth/login", { method: "POST", body: JSON.stringify(data) });
+      state.authToken = session.token;
+      localStorage.setItem("zongce_auth_token", session.token);
+      applyRoleWorkspace(session.user);
+      await refresh();
+      toast("登录成功");
+    } catch (error) {
+      toast(error.message);
+    }
+  };
+
+  $("#logoutBtn").onclick = async () => {
+    try {
+      await api("/api/auth/logout", { method: "POST", body: "{}" });
+    } finally {
+      clearSession();
+    }
+  };
+
+  $("#importYearSelect").onchange = () => loadImportWorkspace().catch((error) => toast(error.message));
+  $("#loadImportHistoryBtn").onclick = () => loadImportHistory().catch((error) => toast(error.message));
+  $("#downloadImportTemplateBtn").onclick = async () => {
+    const scope = state.currentUser?.role === "class_committee" ? "committee" : "college";
+    downloadBase64File(await api(`/api/imports/template?scope=${scope}`));
+  };
+  $("#uploadScoresBtn").onclick = async () => {
+    const file = $("#scoreImportInput").files?.[0];
+    const academicYearId = Number($("#importYearSelect").value);
+    const ruleNodeId = Number($("#importRuleNodeSelect").value);
+    if (!file) throw new Error("请先选择 xlsx 文件");
+    if (!academicYearId || !ruleNodeId) throw new Error("请选择学年和目标规则项");
+    const scope = state.currentUser?.role === "class_committee" ? "committee" : "college";
+    const result = await api(`/api/imports/${scope}`, {
+      method: "POST",
+      body: JSON.stringify({
+        academicYearId,
+        ruleNodeId,
+        fileName: file.name,
+        contentBase64: await fileToBase64(file)
+      })
+    });
+    $("#importResult").innerHTML = `<strong>上传批次 #${result.batchId}</strong><br>成功 ${result.success} 行，失败 ${result.failed} 行${result.errors?.length ? `<br>${result.errors.map((item) => `第 ${item.row} 行：${escapeHtml(item.message)}`).join("<br>")}` : ""}`;
+    $("#scoreImportInput").value = "";
+    await loadImportHistory();
+    toast(`上传完成，成功 ${result.success} 行`);
+  };
+}
+
+async function startApplication() {
+  wireEvents();
+  wireResultAndSystemEvents();
+  await wireAuthAndImportEvents();
+  if (!state.authToken) return;
+  try {
+    const user = await api("/api/auth/me");
+    applyRoleWorkspace(user);
+    await refresh();
+  } catch {
+    clearSession();
+  }
 }
 
 window.addEventListener("error", (event) => {
@@ -1655,6 +1837,4 @@ window.addEventListener("unhandledrejection", (event) => {
   toast(event.reason?.message || "请求失败");
 });
 
-wireEvents();
-wireResultAndSystemEvents();
-refresh();
+startApplication();
