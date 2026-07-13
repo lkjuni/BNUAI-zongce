@@ -675,22 +675,24 @@ function renderYears() {
       }
     };
     const forceDelete = document.createElement("button");
-    forceDelete.className = "danger-btn danger-solid";
-    forceDelete.textContent = "彻底删除";
-    forceDelete.title = "仅最高管理员可用，将删除该学年的全部业务数据";
-    forceDelete.onclick = async () => {
-      try {
-        const operatorId = prompt("请输入最高管理员用户 ID");
-        if (!operatorId) return;
-        const confirmName = prompt(`此操作不可恢复。请输入学年名称“${year.name}”确认：`);
+      forceDelete.className = "danger-btn danger-solid";
+      forceDelete.textContent = "彻底删除";
+      forceDelete.title = "仅最高管理员可用，将删除该学年的全部业务数据";
+      forceDelete.hidden = state.currentUser?.role !== "super_admin";
+      forceDelete.onclick = async () => {
+        try {
+          if (state.currentUser?.role !== "super_admin") {
+            throw new Error("只有最高管理员可以彻底删除学年");
+          }
+          const confirmName = prompt(`此操作不可恢复。请输入学年名称“${year.name}”确认：`);
         if (confirmName !== year.name) {
           toast("学年名称不一致，已取消删除");
           return;
         }
-        const result = await api(
-          `/api/academic-years/${year.id}?force=true&confirmName=${encodeURIComponent(confirmName)}`,
-          { method: "DELETE", headers: { "X-Operator-Id": operatorId } }
-        );
+          const result = await api(
+            `/api/academic-years/${year.id}?force=true&confirmName=${encodeURIComponent(confirmName)}`,
+            { method: "DELETE" }
+          );
         if (Number(state.selectedApplyYearId) === Number(year.id)) state.selectedApplyYearId = null;
         await loadYears();
         renderAll();
@@ -1785,7 +1787,8 @@ async function wireAuthAndImportEvents() {
   const roleAccounts = {
     student: "student001",
     class_committee: "committee001",
-    college_admin: "admin001"
+    college_admin: "admin001",
+    super_admin: "rootadmin"
   };
   document.querySelectorAll("#loginForm input[name='role']").forEach((input) => {
     input.onchange = () => {

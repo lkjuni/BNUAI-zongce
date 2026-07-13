@@ -98,7 +98,7 @@ async function seedDefaultRuleSet() {
     await aggregate(total, "academic", "学业成绩", 86, "manual", 20, "教务成绩导入，不作为学生申报项。");
 
     const innovation = await aggregate(total, "innovation", "学术创新成果", 7, "cap", 30, "附件二；全部独立成果汇总后最高 7 分。");
-    const research = await aggregate(innovation, "innovation.research", "科研成果", null, "sum", 10);
+    const research = await aggregate(innovation, "innovation.research", "科研成果", null, "max", 10, "科研成果子类别按最高分计入。" );
 
     await levelItem(research, {
       code: "innovation.research.project",
@@ -148,7 +148,7 @@ async function seedDefaultRuleSet() {
     await audit(highLevelItem, "college_admin", "由工作小组评议并确认分值。", false);
 
     const competition = await aggregate(innovation, "innovation.competition", "竞赛获奖", null, "sum", 20);
-    const professional = await aggregate(competition, "innovation.competition.professional", "专业竞赛类", null, "sum", 10, "不同竞赛可以同时发生，拆为独立规则项后求和。");
+    const professional = await aggregate(competition, "innovation.competition.professional", "专业竞赛类", null, "max", 10, "专业竞赛类子类别按最高分计入。");
     const professionalItems = [
       ["icpc", "国际大学生程序设计竞赛", [["世界总决赛入围",7],["东大陆决赛金奖",5],["东大陆决赛银奖",4],["东大陆决赛铜奖",3],["区域赛金奖",3],["区域赛银奖",2],["区域赛铜奖",1]]],
       ["ccpc", "中国大学生程序设计竞赛", [["全国总决赛金奖",5],["全国总决赛银奖",4],["全国总决赛铜奖",3],["区域赛/女生专场金奖",3],["区域赛/女生专场银奖",2],["区域赛/女生专场铜奖",1],["校内选拔一等奖",0.5],["校内选拔二等奖",0.3]]],
@@ -175,7 +175,7 @@ async function seedDefaultRuleSet() {
       });
     }
 
-    const creative = await aggregate(competition, "innovation.competition.creative", "创意策划类", null, "sum", 20, "不同竞赛拆分；同一竞赛内部奖项和成员角色互斥。");
+    const creative = await aggregate(competition, "innovation.competition.creative", "创意策划类", null, "max", 20, "创意策划类子类别按最高分计入。");
     const creativeItems = [
       ["challenge_cup", "挑战杯课外学术科技作品竞赛", [["国家特等奖-负责人",7],["国家特等奖-成员前50%",5],["国家特等奖-成员后50%",4],["国家一等奖-负责人",5],["国家一等奖-成员前50%",4],["国家一等奖-成员后50%",3],["国家二等奖-负责人",4],["国家二等奖-成员前50%",3],["国家二等奖-成员后50%",2],["省市特等奖-负责人",2.5],["省市一等奖-负责人",2]], true],
       ["entrepreneurship", "小挑/互联网+/创青春", [["国家金奖/一等奖-负责人",5],["国家金奖/一等奖-成员前50%",3],["国家金奖/一等奖-成员后50%",2],["国家银奖/二等奖-负责人",3.5],["国家铜奖/三等奖-负责人",2.5],["省市金奖/一等奖-负责人",2],["省市银奖/二等奖-负责人",1.6],["省市铜奖/三等奖-负责人",1.2]], true],
@@ -234,13 +234,18 @@ async function seedDefaultRuleSet() {
     });
 
     const studentWork = await aggregate(total, "student_work", "学生工作", 7, "cap", 40, "附件四；岗位任职最高3分，学生活动最高4分。");
-    const positionItem = await item(studentWork, "student_work.position", "岗位任职", 10, "多个岗位不累计，学生只申报计分最高的一个岗位。");
+    const position = await aggregate(studentWork, "student_work.position", "岗位任职", 3, "max", 10, "学生可以申报多个岗位，岗位类别之间只取最高分。" );
     const positionScores = [["校级职务一档",3],["校级职务二档",2],["校级职务三档",1],["校级职务四档",0.5],["校级职务五档",0.25],["党支部书记",2],["党支部委员",1],["班长/团支书/学习委员",2],["其他班委",1],["院团委副书记/院学生会主席",3],["院级部门负责人",2],["人工智能社团社长",0.5],["青年团校/宣讲团A级",1],["青年团校/宣讲团B级",0.5],["青年团校/宣讲团C级",0.2]];
-    await config(positionItem, "formula", { base_scores: positionScores.map(([name, score]) => ({ name, score })) }, "POSITION_SCORE_BY_WEIGHT");
-    await field(positionItem, "position_name", "岗位类别", "select", positionScores.map(([name]) => name));
-    await field(positionItem, "evaluation_weight", "岗位评价权重", "number", null, 2, true, { min: 0, max: 1, step: 0.01 });
-    await proof(positionItem, "任职证明或评议结果", "需包含任职周期和评价权重。", 8);
-    await audit(positionItem, "class_committee", "核对任职时长、岗位类别、评价权重并确认只取最高岗位。");
+    for (let index = 0; index < positionScores.length; index++) {
+      const [positionName, score] = positionScores[index];
+      const positionItem = await item(position, `student_work.position.${index + 1}`, positionName, (index + 1) * 10, "一个规则项对应一种岗位，学生可以分别申报多个岗位。" );
+      await config(positionItem, "formula", { base_scores: [{ name: positionName, score }] }, "POSITION_SCORE_BY_WEIGHT");
+      await field(positionItem, "position_name", "岗位类别", "select", [positionName], 1, true);
+      await field(positionItem, "evaluation_weight", "岗位评价权重", "number", null, 2, true, { min: 0, max: 1, step: 0.01 });
+      await field(positionItem, "service_period", "任职周期", "text", null, 3, true);
+      await proof(positionItem, "任职证明或评议结果", "需包含任职周期和评价权重。", 8);
+      await audit(positionItem, "class_committee", "核对任职时长、岗位类别、评价权重。" );
+    }
 
     const activity = await aggregate(studentWork, "student_work.activity", "学生活动", 4, "cap", 20);
     const sports = await aggregate(activity, "student_work.activity.sports", "文体比赛类", 2, "cap", 10, "不同比赛项目独立申报，汇总后最高2分。");
