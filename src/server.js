@@ -1,3 +1,4 @@
+import "dotenv/config";
 import http from "node:http";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { handleAuditCalculationApi, runCalculation } from "./auditCalculation.js
 import { handleApplicationSubmissionApi } from "./applicationSubmission.js";
 import { handleResultManagementApi } from "./resultManagement.js";
 import { handleSystemManagementApi, logOperation } from "./systemManagement.js";
+import { handleAIReviewApi } from "./aiReview.js";
 import { seedDefaultRuleSet } from "./defaultRuleSet.js";
 import { authenticateRequest, ensureBootstrapAccounts, handleAuthApi } from "./auth.js";
 import { handleScoreImportApi } from "./scoreImport.js";
@@ -88,72 +90,12 @@ function normalizeParentId(value) {
   return parentId;
 }
 
-function normalizeNodeScoringBoundary(nodeType, rawMaxScore, rawAggregationType) {
-  const maxScore = toNullableDecimal(rawMaxScore);
-  const aggregationType = rawAggregationType || null;
-  if (nodeType === "item" && (maxScore !== null || aggregationType !== null)) {
-    throw httpError(400, "规则项不能设置上限分或汇总方式；请把汇总关系放到父级汇总节点");
-  }
-  if (nodeType === "aggregate" && !aggregationType) {
-    throw httpError(400, "汇总节点必须设置汇总方式");
-  }
-  return { maxScore, aggregationType };
-}
-
-async function validateRuleVersionForPublish(versionId) {
-  const rows = await query(
-    `SELECT n.id, n.code, n.name, n.parent_id, n.node_type, n.max_score, n.aggregation_type, n.is_apply_entry,
-            COUNT(c.id) AS child_count,
-            (SELECT COUNT(*) FROM rule_calculation_config rc WHERE rc.node_id = n.id) AS calculation_count
-     FROM rule_node n
-     LEFT JOIN rule_node c ON c.parent_id = n.id
-     WHERE n.rule_set_version_id = :versionId
-     GROUP BY n.id
-     ORDER BY n.id`,
-    { versionId }
-  );
-  if (!rows.length) throw httpError(409, "规则版本没有任何节点，不能发布");
-  const errors = [];
-  const rootCount = rows.filter((row) => !row.parent_id).length;
-  if (rootCount !== 1) errors.push(`规则树必须且只能有一个根节点，当前为 ${rootCount} 个`);
-  for (const row of rows) {
-    const childCount = Number(row.child_count);
-    if (row.node_type === "item") {
-      if (row.max_score !== null || row.aggregation_type !== null) errors.push(`${row.name}：规则项不能包含汇总配置`);
-      if (childCount) errors.push(`${row.name}：规则项不能包含子节点`);
-      if (!row.is_apply_entry) errors.push(`${row.name}：规则项必须是申报入口`);
-      if (!Number(row.calculation_count)) errors.push(`${row.name}：规则项缺少计分配置`);
-    } else {
-      if (row.is_apply_entry) errors.push(`${row.name}：汇总节点不能作为申报入口`);
-      if (!row.aggregation_type) errors.push(`${row.name}：汇总节点缺少汇总方式`);
-      if (childCount === 1) errors.push(`${row.name}：汇总节点只有一个子节点，请消除冗余层级或增加真实的平级规则项`);
-    }
-  }
-  if (errors.length) {
-    const error = httpError(409, "规则版本不符合统一建模约束");
-    error.details = errors;
-    throw error;
-  }
-}
-
-async function requireItemNode(nodeId, capabilityName) {
-  const [node] = await query(`SELECT id, node_type, name FROM rule_node WHERE id = :nodeId`, { nodeId });
-  if (!node) throw httpError(404, "规则节点不存在");
-  if (normalizeRuleNodeType(node.node_type) !== "item") {
-    throw httpError(400, `${capabilityName}只能配置在规则项，汇总节点只负责汇总子节点得分`);
-  }
-  return node;
-}
-
 async function validateRuleNodeStructure({ versionId, nodeId = null, parentId, nodeType, isApplyEntry }) {
   // 外键负责保护数据引用，下面的校验负责保护单行约束无法表达的树结构语义。
   const normalizedType = normalizeRuleNodeType(nodeType);
 
   if (normalizedType === "aggregate" && isApplyEntry) {
     throw httpError(400, "汇总节点不能作为申报入口，请新建下级规则项");
-  }
-  if (normalizedType === "item" && !isApplyEntry) {
-    throw httpError(400, "规则项必须作为申报入口；不接受申报的层级应建为汇总节点");
   }
   if (normalizedType === "item" && parentId === null) {
     throw httpError(400, "规则项不能作为根节点，必须挂在汇总节点下");
@@ -215,15 +157,8 @@ function clientIp(req) {
 }
 
 async function requireSuperAdmin(conn, req) {
-  // 新前端优先使用登录会话；X-Operator-Id 仅为旧验证脚本保留。
-  if (req.authUser) {
-    if (req.authUser.status !== "active" || req.authUser.role !== "super_admin") {
-      throw httpError(403, "只有状态正常的最高管理员可以彻底删除学年");
-    }
-    return req.authUser;
-  }
-  // 旧验证脚本没有会话令牌时，根据操作者 ID 查询 system_user；
-  // 即使走兼容分支，也不直接信任调用方传入的角色字符串。
+  // 当前原型尚未接入登录会话，因此根据操作者 ID 查询 system_user，
+  // 不直接信任浏览器传入的角色字符串。
   const operatorId = Number(req.headers["x-operator-id"]);
   if (!Number.isInteger(operatorId) || operatorId <= 0) {
     throw httpError(403, "彻底删除学年需要提供最高管理员用户 ID");
@@ -820,6 +755,9 @@ async function handleApi(req, res) {
     return ok(res, { database: rows[0].ok === 1, table_count: tableCount.count });
   }
 
+  const handledByAIReview = await handleAIReviewApi(req, res, { parts, method, url, ok, fail, readJson });
+  if (handledByAIReview !== false) return;
+
   const handledByAuth = await handleAuthApi(req, res, { parts, method, url, ok, fail, readJson });
   if (handledByAuth !== false) return;
 
@@ -847,10 +785,8 @@ async function handleApi(req, res) {
   }
 
   if (method === "POST" && parts.join("/") === "api/dev/seed-demo") {
-    const data = await seedDefaultRuleSet();
-    const snapshot = await bindAcademicYearSnapshot(data.academicYearId, data.versionId, 1);
-    data.snapshotId = snapshot.id;
-    return ok(res, data, "规范版示例规则集已创建");
+    const data = await seedDemo();
+    return ok(res, data, "示例规则集已创建");
   }
 
   if (method === "GET" && parts.join("/") === "api/rule-sets") {
@@ -914,7 +850,6 @@ async function handleApi(req, res) {
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-versions" && parts[3] === "publish") {
     const versionId = Number(parts[2]);
-    await validateRuleVersionForPublish(versionId);
     await query(
       `UPDATE rule_set_version
        SET status = 'published', published_by = :publishedBy, published_at = NOW()
@@ -941,11 +876,6 @@ async function handleApi(req, res) {
       nodeType: body.node_type || body.nodeType,
       isApplyEntry
     });
-    const scoringBoundary = normalizeNodeScoringBoundary(
-      nodeType,
-      body.max_score ?? body.maxScore,
-      body.aggregation_type || body.aggregationType
-    );
     const result = await query(
       `INSERT INTO rule_node
        (rule_set_version_id, parent_id, node_type, code, name, max_score, aggregation_type, is_apply_entry, sort_order, status, description)
@@ -956,8 +886,8 @@ async function handleApi(req, res) {
         nodeType,
         code: body.code,
         name: body.name,
-        maxScore: scoringBoundary.maxScore,
-        aggregationType: scoringBoundary.aggregationType,
+        maxScore: toNullableDecimal(body.max_score ?? body.maxScore),
+        aggregationType: body.aggregation_type || body.aggregationType || null,
         isApplyEntry: isApplyEntry ? 1 : 0,
         sortOrder: Number(body.sort_order || body.sortOrder || 0),
         description: body.description || null
@@ -983,11 +913,6 @@ async function handleApi(req, res) {
       nodeType: body.node_type || body.nodeType,
       isApplyEntry
     });
-    const scoringBoundary = normalizeNodeScoringBoundary(
-      nodeType,
-      body.max_score ?? body.maxScore,
-      body.aggregation_type || body.aggregationType
-    );
     await query(
       `UPDATE rule_node
        SET parent_id = :parentId,
@@ -1007,8 +932,8 @@ async function handleApi(req, res) {
         nodeType,
         code: body.code,
         name: body.name,
-        maxScore: scoringBoundary.maxScore,
-        aggregationType: scoringBoundary.aggregationType,
+        maxScore: toNullableDecimal(body.max_score ?? body.maxScore),
+        aggregationType: body.aggregation_type || body.aggregationType || null,
         isApplyEntry: isApplyEntry ? 1 : 0,
         sortOrder: Number(body.sort_order || body.sortOrder || 0),
         status: body.status || "enabled",
@@ -1044,7 +969,6 @@ async function handleApi(req, res) {
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-nodes" && parts[3] === "calculation-configs") {
     const nodeId = Number(parts[2]);
-    await requireItemNode(nodeId, "计分配置");
     const body = await readJson(req);
     const result = await query(
       `INSERT INTO rule_calculation_config (node_id, config_type, formula_code, config_json, rounding_rule, sort_order)
@@ -1063,7 +987,6 @@ async function handleApi(req, res) {
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-nodes" && parts[3] === "form-fields") {
     const nodeId = Number(parts[2]);
-    await requireItemNode(nodeId, "申报字段");
     const body = await readJson(req);
     const result = await query(
       `INSERT INTO rule_form_field
@@ -1085,7 +1008,6 @@ async function handleApi(req, res) {
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-nodes" && parts[3] === "materials") {
     const nodeId = Number(parts[2]);
-    await requireItemNode(nodeId, "材料要求");
     const body = await readJson(req);
     const result = await query(
       `INSERT INTO material_requirement (node_id, material_name, required, description, file_type_limit, max_file_count)
@@ -1104,7 +1026,6 @@ async function handleApi(req, res) {
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-nodes" && parts[3] === "audit-requirements") {
     const nodeId = Number(parts[2]);
-    await requireItemNode(nodeId, "审核要求");
     const body = await readJson(req);
     const result = await query(
       `INSERT INTO audit_requirement (node_id, audit_role, audit_instruction, reject_reason_template, need_second_audit)
@@ -1138,7 +1059,6 @@ async function handleApi(req, res) {
 
   if (method === "POST" && parts[0] === "api" && parts[1] === "rule-nodes" && parts[3] === "group-rules") {
     const nodeId = Number(parts[2]);
-    await requireItemNode(nodeId, "团体分配规则");
     const body = await readJson(req);
     const result = await query(
       `INSERT INTO group_distribution_rule (node_id, distribution_type, config_json)

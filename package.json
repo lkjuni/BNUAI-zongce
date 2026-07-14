@@ -8,10 +8,11 @@
     "dev": "node src/server.js"
   },
   "dependencies": {
-    "mysql2": "^3.11.5"
+    "dotenv": "^17.4.2",
+    "mysql2": "^3.11.5",
+    "openai": "^6.46.0"
   },
   "engines": {
     "node": ">=20"
   }
 }
-

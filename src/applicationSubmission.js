@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, transaction } from "./db.js";
+import { triggerAIReview } from "./aiReview.js";
 
 // 学生申报流程：根据学年规则快照生成表单，保存草稿和证明材料，
 // 并在每次正式提交时固化不可变的申报版本。
@@ -657,6 +658,9 @@ async function attachMaterial(applicationId, body) {
     });
     return { id: insert.insertId, fileUrl };
   });
+
+  // 异步触发 AI 审核，不阻塞上传响应
+  triggerAIReview(result.id, applicationId, result.fileUrl, fileName);
 
   return { ...result, detail: await fetchApplicationDetail(applicationId) };
 }

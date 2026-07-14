@@ -18,6 +18,7 @@ const state = {
   applyStudentId: "2026001",
   auditApplications: [],
   selectedAuditApplication: null,
+  aiReviewData: null,
   calcBatches: [],
   selectedCalcBatchId: null,
   calcResults: [],
@@ -360,8 +361,15 @@ async function loadAuditApplications() {
   renderAudit();
 }
 
+async function loadAIReviewData() {
+  if (!state.selectedAuditApplication) return;
+  state.aiReviewData = await api(`/api/ai-review/applications/${state.selectedAuditApplication.id}`).catch(() => null);
+  renderAudit();
+}
+
 async function loadAuditDetail(applicationId) {
   state.selectedAuditApplication = await api(`/api/audit/applications/${applicationId}`);
+  state.aiReviewData = await api(`/api/ai-review/applications/${applicationId}`).catch(() => null);
   renderAudit();
 }
 
@@ -950,12 +958,29 @@ function renderAudit() {
   const auditHtml = (app.audits || [])
     .map((row) => `<div class="detail-line">${row.audit_role} · ${row.audit_result}<br>${row.audit_comment || ""}</div>`)
     .join("");
+  const aiReviewHtml = state.aiReviewData
+    ? state.aiReviewData
+        .map((row) => {
+          const statusIcon = row.review_status === "completed" ? "✅" : row.review_status === "processing" ? "⏳" : row.review_status === "failed" ? "❌" : "⬜";
+          const extracted = row.extracted_info_json || {};
+          const matchLabel = { match: "✅ 匹配", mismatch: "❌ 不匹配", partial: "⚠️ 部分匹配", uncertain: "❓ 不确定" }[row.match_result] || "";
+          return `<div class="detail-line">
+            ${statusIcon} <strong>${escapeHtml(row.file_name)}</strong><br>
+            ${matchLabel} ${row.match_summary || ""}<br>
+            姓名: ${escapeHtml(extracted.person_name || "-")} · 学号: ${escapeHtml(extracted.student_id || "-")}<br>
+            证书: ${escapeHtml(extracted.certificate_title || "-")} · 等级: ${escapeHtml(extracted.award_level || "-")}<br>
+            置信度: ${row.confidence_score ?? "-"} · 耗时: ${row.processing_time_ms ?? "-"}ms
+          </div>`;
+        })
+        .join("")
+    : '<div class="detail-line">点击"加载 AI 审核"查看</div>';
   detail.innerHTML = `
     <strong>${app.title || app.rule_name}</strong>
     <div class="node-meta">${app.rule_code} · 学生 ${app.student_id} · ${app.status}</div>
     <div class="detail-group"><strong>字段</strong>${fieldHtml || '<div class="detail-line">无</div>'}</div>
     <div class="detail-group"><strong>学生上传材料</strong>${attachmentHtml || '<div class="detail-line">无</div>'}</div>
     <div class="detail-group"><strong>审核记录</strong>${auditHtml || '<div class="detail-line">暂无</div>'}</div>
+    <div class="detail-group"><strong>🤖 AI 审核</strong>${aiReviewHtml}</div>
   `;
 }
 
