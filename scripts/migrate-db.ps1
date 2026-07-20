@@ -4,6 +4,7 @@ param(
     "003_system_result_management.sql",
     "004_auth_role_score_import.sql",
     "005_unique_rule_item_application.sql",
+    "006_ai_audit.sql",
     "migrate-rule-node-aggregate.sql"
   )]
   [string]$MigrationFile = "003_system_result_management.sql"

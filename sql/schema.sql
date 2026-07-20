@@ -30,6 +30,7 @@ DROP TABLE IF EXISTS application_audit_record;
 DROP TABLE IF EXISTS application_operation_log;
 DROP TABLE IF EXISTS application_revision;
 DROP TABLE IF EXISTS application_member;
+DROP TABLE IF EXISTS ai_audit_record;
 DROP TABLE IF EXISTS application_attachment;
 DROP TABLE IF EXISTS application_field_value;
 DROP TABLE IF EXISTS application_record;

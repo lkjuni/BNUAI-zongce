@@ -950,11 +950,35 @@ function renderAudit() {
   const auditHtml = (app.audits || [])
     .map((row) => `<div class="detail-line">${row.audit_role} · ${row.audit_result}<br>${row.audit_comment || ""}</div>`)
     .join("");
+  let aiAuditHtml = "";
+  const aiAudits = app.ai_audits || [];
+  if (aiAudits.length) {
+    const overallRecord = aiAudits.find(r => r.attachment_id === null);
+    const perAttachment = aiAudits.filter(r => r.attachment_id !== null);
+    aiAuditHtml = `<div class="detail-group" style="border:1px solid #6366f1;border-radius:8px;padding:12px;margin:8px 0;background:#f5f3ff">
+      <strong style="color:#4338ca">AI 自动审核结果</strong>`;
+    if (overallRecord) {
+      const matchIcon = overallRecord.match_success ? "通过" : "不通过";
+      aiAuditHtml += `<div class="detail-line" style="margin-top:6px"><strong>综合结论：</strong>${matchIcon} — ${escapeHtml(overallRecord.match_detail || "")}</div>`;
+      aiAuditHtml += `<div class="detail-line"><strong>上传学生：</strong>${escapeHtml(overallRecord.student_name)}</div>`;
+      if (overallRecord.recognized_names?.length) {
+        aiAuditHtml += `<div class="detail-line"><strong>AI识别姓名：</strong>${escapeHtml(overallRecord.recognized_names.join("、"))}</div>`;
+      }
+    }
+    if (perAttachment.length) {
+      for (const rec of perAttachment) {
+        aiAuditHtml += `<div class="detail-line" style="margin:4px 0;padding:4px 8px;background:#eef;border-radius:4px">${escapeHtml(rec.match_detail || "")}</div>`;
+      }
+    }
+    aiAuditHtml += `</div>`;
+  }
+
   detail.innerHTML = `
     <strong>${app.title || app.rule_name}</strong>
     <div class="node-meta">${app.rule_code} · 学生 ${app.student_id} · ${app.status}</div>
     <div class="detail-group"><strong>字段</strong>${fieldHtml || '<div class="detail-line">无</div>'}</div>
     <div class="detail-group"><strong>学生上传材料</strong>${attachmentHtml || '<div class="detail-line">无</div>'}</div>
+    ${aiAuditHtml}
     <div class="detail-group"><strong>审核记录</strong>${auditHtml || '<div class="detail-line">暂无</div>'}</div>
   `;
 }

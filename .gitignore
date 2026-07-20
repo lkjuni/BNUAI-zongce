@@ -3,5 +3,11 @@ node_modules/
 tmp/
 tools/
 .env
+.env.*
+!.env.example
 *.log
 uploads/applications/
+
+# 云服务控制台导出的密钥文件只允许保存在本机，禁止提交。
+*apiKey*.csv
+*apikey*.csv

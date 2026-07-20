@@ -60,7 +60,7 @@ async function fetchApplicationDetail(applicationId) {
     throw error;
   }
 
-  const [fields, attachments, members, audits, requirements, materials, revisions, operations] = await Promise.all([
+  const [fields, attachments, members, audits, requirements, materials, revisions, operations, aiAudits] = await Promise.all([
     query(`SELECT * FROM application_field_value WHERE application_id = :applicationId ORDER BY id`, { applicationId }),
     query(`SELECT * FROM application_attachment WHERE application_id = :applicationId ORDER BY id`, { applicationId }),
     query(`SELECT * FROM application_member WHERE application_id = :applicationId ORDER BY rank_no, id`, { applicationId }),
@@ -68,7 +68,8 @@ async function fetchApplicationDetail(applicationId) {
     query(`SELECT * FROM audit_requirement WHERE node_id = :nodeId ORDER BY id`, { nodeId: application.rule_node_id }),
     query(`SELECT * FROM material_requirement WHERE node_id = :nodeId ORDER BY id`, { nodeId: application.rule_node_id }),
     query(`SELECT * FROM application_revision WHERE application_id = :applicationId ORDER BY revision_no`, { applicationId }),
-    query(`SELECT * FROM application_operation_log WHERE application_id = :applicationId ORDER BY created_at`, { applicationId })
+    query(`SELECT * FROM application_operation_log WHERE application_id = :applicationId ORDER BY created_at`, { applicationId }),
+    query(`SELECT * FROM ai_audit_record WHERE application_id = :applicationId ORDER BY attachment_id IS NOT NULL DESC, id`, { applicationId })
   ]);
 
   return {
@@ -80,7 +81,12 @@ async function fetchApplicationDetail(applicationId) {
     audit_requirements: normalizeRows(requirements),
     material_requirements: materials,
     revisions: normalizeRows(revisions),
-    operations: normalizeRows(operations)
+    operations: normalizeRows(operations),
+    ai_audits: aiAudits.map(row => {
+      try { row.recognized_names = JSON.parse(row.recognized_names || "[]"); } catch { row.recognized_names = []; }
+      try { row.student_name_pinyin = JSON.parse(row.student_name_pinyin || "{}"); } catch { row.student_name_pinyin = {}; }
+      return row;
+    })
   };
 }
 

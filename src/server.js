@@ -8,8 +8,9 @@ import { handleApplicationSubmissionApi } from "./applicationSubmission.js";
 import { handleResultManagementApi } from "./resultManagement.js";
 import { handleSystemManagementApi, logOperation } from "./systemManagement.js";
 import { seedDefaultRuleSet } from "./defaultRuleSet.js";
-import { authenticateRequest, ensureBootstrapAccounts, handleAuthApi } from "./auth.js";
+import { authenticateRequest, ensureBootstrapAccounts, handleAuthApi, requireRoles } from "./auth.js";
 import { handleScoreImportApi } from "./scoreImport.js";
+import { getAiAuditResults, triggerAiAudit } from "./aiAudit.js";
 
 // 应用入口：负责 HTTP 路由、规则/学年生命周期和静态文件等跨模块能力。
 // 申报、审核核算、结果和系统管理等具体业务分别放在独立模块中。
@@ -829,6 +830,26 @@ async function handleApi(req, res) {
   const handledByAuditCalculation = await handleAuditCalculationApi(req, res, { parts, method, url, ok, fail, readJson });
   if (handledByAuditCalculation !== false) return;
 
+  // AI 自动审核结果查询
+  if (method === "GET" && parts[0] === "api" && parts[1] === "ai-audit" && parts.length === 3) {
+    requireRoles(req, ["class_committee", "college_admin", "super_admin"]);
+    const applicationId = Number(parts[2]);
+    const results = await getAiAuditResults(applicationId);
+    return ok(res, results);
+  }
+
+  // 手动触发 AI 自动审核（用于测试或重试）
+  if (method === "POST" && parts[0] === "api" && parts[1] === "ai-audit" && parts[2] === "trigger" && parts.length === 4) {
+    requireRoles(req, ["class_committee", "college_admin", "super_admin"]);
+    const applicationId = Number(parts[3]);
+    setImmediate(() => {
+      triggerAiAudit(applicationId).catch(err =>
+        console.error(`AI 审核失败 (applicationId=${applicationId}):`, err.message)
+      );
+    });
+    return ok(res, { applicationId }, "AI 审核已触发，请稍后查询结果");
+  }
+
   const handledByApplicationSubmission = await handleApplicationSubmissionApi(req, res, { parts, method, url, ok, fail, readJson });
   if (handledByApplicationSubmission !== false) return;
 
@@ -1273,17 +1294,53 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(port, host, async () => {
-  try {
-    await ensureBootstrapAccounts();
-    const [tableCount] = await query("SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE()");
-    console.log(`Rule config demo is running at http://${host}:${port}`);
-    console.log(`Local access: http://localhost:${port}`);
-    console.log(`Connected to MySQL with ${tableCount.count} tables.`);
-  } catch (error) {
-    console.error("Server started, but database connection failed:", error.message);
+const databaseStartupAttempts = 30;
+const databaseRetryDelayMs = 1000;
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function initializeDatabase() {
+  let lastError;
+  for (let attempt = 1; attempt <= databaseStartupAttempts; attempt += 1) {
+    try {
+      await ensureBootstrapAccounts();
+      const [tableCount] = await query(
+        "SELECT COUNT(*) AS count FROM information_schema.tables WHERE table_schema = DATABASE()"
+      );
+      return tableCount;
+    } catch (error) {
+      lastError = error;
+      if (attempt === databaseStartupAttempts) break;
+      console.warn(
+        `Database is not ready (${attempt}/${databaseStartupAttempts}): ${error.message}. Retrying in ${databaseRetryDelayMs}ms.`
+      );
+      await delay(databaseRetryDelayMs);
+    }
   }
-});
+  throw lastError;
+}
+
+async function startServer() {
+  try {
+    const tableCount = await initializeDatabase();
+    server.listen(port, host, () => {
+      console.log(`Rule config demo is running at http://${host}:${port}`);
+      console.log(`Local access: http://localhost:${port}`);
+      console.log(`Connected to MySQL with ${tableCount.count} tables.`);
+    });
+  } catch (error) {
+    console.error(
+      `Application startup failed after ${databaseStartupAttempts} database connection attempts:`,
+      error.message
+    );
+    await pool.end();
+    process.exit(1);
+  }
+}
+
+void startServer();
 
 process.on("SIGINT", async () => {
   await pool.end();

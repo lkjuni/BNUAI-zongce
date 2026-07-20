@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, transaction } from "./db.js";
+import { triggerAiAudit } from "./aiAudit.js";
 
 // 学生申报流程：根据学年规则快照生成表单，保存草稿和证明材料，
 // 并在每次正式提交时固化不可变的申报版本。
@@ -188,14 +189,15 @@ async function fetchApplicationDetail(applicationId) {
     throw makeHttpError(404, "申报记录不存在");
   }
 
-  const [fields, attachments, members, materials, formFields, revisions, operations] = await Promise.all([
+  const [fields, attachments, members, materials, formFields, revisions, operations, aiAudits] = await Promise.all([
     query(`SELECT * FROM application_field_value WHERE application_id = :applicationId ORDER BY id`, { applicationId }),
     query(`SELECT * FROM application_attachment WHERE application_id = :applicationId ORDER BY id`, { applicationId }),
     query(`SELECT * FROM application_member WHERE application_id = :applicationId ORDER BY rank_no, id`, { applicationId }),
     query(`SELECT * FROM material_requirement WHERE node_id = :nodeId ORDER BY id`, { nodeId: application.rule_node_id }),
     query(`SELECT * FROM rule_form_field WHERE node_id = :nodeId ORDER BY sort_order, id`, { nodeId: application.rule_node_id }),
     query(`SELECT * FROM application_revision WHERE application_id = :applicationId ORDER BY revision_no`, { applicationId }),
-    query(`SELECT * FROM application_operation_log WHERE application_id = :applicationId ORDER BY created_at`, { applicationId })
+    query(`SELECT * FROM application_operation_log WHERE application_id = :applicationId ORDER BY created_at`, { applicationId }),
+    query(`SELECT * FROM ai_audit_record WHERE application_id = :applicationId ORDER BY attachment_id IS NOT NULL DESC, id`, { applicationId })
   ]);
 
   return {
@@ -206,7 +208,12 @@ async function fetchApplicationDetail(applicationId) {
     material_requirements: normalizeRows(materials),
     form_fields: normalizeRows(formFields),
     revisions: normalizeRows(revisions),
-    operations: normalizeRows(operations)
+    operations: normalizeRows(operations),
+    ai_audits: aiAudits.map(row => {
+      try { row.recognized_names = JSON.parse(row.recognized_names || "[]"); } catch { row.recognized_names = []; }
+      try { row.student_name_pinyin = JSON.parse(row.student_name_pinyin || "{}"); } catch { row.student_name_pinyin = {}; }
+      return row;
+    })
   };
 }
 
@@ -563,7 +570,16 @@ async function submitApplication(applicationId, body) {
   const studentId = Number(body.student_id || body.studentId);
   const operatorId = studentId || Number(body.operator_id || body.operatorId || 1);
   const result = await transaction(async (conn) => submitApplicationTx(conn, applicationId, studentId, operatorId));
-  return { ...result, detail: await fetchApplicationDetail(applicationId) };
+  const detail = await fetchApplicationDetail(applicationId);
+
+  // 异步触发 AI 自动审核（不阻塞提交响应）
+  setImmediate(() => {
+    triggerAiAudit(applicationId).catch(err =>
+      console.error(`AI 审核失败 (applicationId=${applicationId}):`, err.message)
+    );
+  });
+
+  return { ...result, detail };
 }
 
 async function attachMaterial(applicationId, body) {
